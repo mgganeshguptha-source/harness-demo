@@ -47,6 +47,9 @@ class HarnessConfig:
     coverage_csv: str = "target/site/jacoco/jacoco.csv"
     # Which metric to gate on: LINE, BRANCH, INSTRUCTION, METHOD.
     coverage_metric: str = "LINE"
+    # Where the harness reads the user story from (repo-relative). In production an
+    # MCP/Jira step writes this file; for the demo it's committed to the repo.
+    story_file: str = "stories/current-story.md"
 
     @classmethod
     def load(cls, harness_dir: Path) -> "HarnessConfig":
@@ -69,6 +72,7 @@ class HarnessConfig:
             coverage_command=data.get("coverage_command", cls.coverage_command),
             coverage_csv=data.get("coverage_csv", cls.coverage_csv),
             coverage_metric=data.get("coverage_metric", cls.coverage_metric),
+            story_file=data.get("story_file", cls.story_file),
         )
 
     def resolved_test_command(self) -> str:

@@ -44,7 +44,19 @@ def cmd_init(args):
     hd = _harness_dir(repo)
     hd.mkdir(parents=True, exist_ok=True)
     from phases import PHASES
-    run = RunState(feature_id=args.feature, story=args.story, current_phase=PHASES[0].id)
+
+    # Story precedence: explicit --story flag, else read from the configured file
+    # (which in production an MCP/Jira step would populate).
+    story = getattr(args, "story", None)
+    if not story:
+        from config import HarnessConfig
+        from story_source import FileStorySource
+        cfg = HarnessConfig.load(hd)
+        src = FileStorySource(repo / cfg.story_file)
+        story = src.get_story()
+        print(f"Read story from {cfg.story_file}")
+
+    run = RunState(feature_id=args.feature, story=story, current_phase=PHASES[0].id)
     run.save(hd)
     print(f"Initialized run for '{args.feature}' at {hd}")
     print(f"First phase: {run.current_phase}")
@@ -117,7 +129,8 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("init"); pi.add_argument("--repo", required=True)
-    pi.add_argument("--feature", required=True); pi.add_argument("--story", required=True)
+    pi.add_argument("--feature", required=True)
+    pi.add_argument("--story", default=None, help="story text; if omitted, read from config.story_file")
     pi.set_defaults(func=cmd_init)
 
     pr = sub.add_parser("run"); pr.add_argument("--repo", required=True)

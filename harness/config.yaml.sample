@@ -37,5 +37,9 @@ coverage_csv: "target/site/jacoco/jacoco.csv"
 # Metric to gate on: LINE, BRANCH, INSTRUCTION, or METHOD.
 coverage_metric: "LINE"
 
+# Where the harness reads the user story from (repo-relative).
+# In production an MCP/Jira step writes this file; for the demo it's committed.
+story_file: "stories/current-story.md"
+
 # Default model for live runs.
 model: "gpt-5-mini"
