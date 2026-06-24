@@ -110,11 +110,23 @@ class SdkAgentRunner:
             return AgentResult(errored=True, error_msg=msg)
 
     async def _run_async(self, phase: Phase, run: RunState, repo_root: Path) -> AgentResult:
+        import os
         from copilot import CopilotClient
         from copilot.rpc import (
             PermissionDecisionApproveOnce,
             PermissionDecisionReject,
         )
+
+        # Auth mode: in CI a Copilot token env var is set (COPILOT_GITHUB_TOKEN /
+        # GH_TOKEN / GITHUB_TOKEN). When present, do NOT use stored login — the SDK
+        # picks up the token automatically. Locally (no token), use the logged-in
+        # user (your interactive Copilot CLI session).
+        has_ci_token = bool(
+            os.environ.get("COPILOT_GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or os.environ.get("GITHUB_TOKEN")
+        )
+        use_logged_in = not has_ci_token
 
         attempted_writes: list[str] = []
 
@@ -152,7 +164,7 @@ class SdkAgentRunner:
         # our globs. use_logged_in_user=True rides on your authed Copilot CLI (Pro).
         async with CopilotClient(
             working_directory=str(repo_root),
-            use_logged_in_user=True,
+            use_logged_in_user=use_logged_in,
         ) as client:
             async with await client.create_session(
                 on_permission_request=on_permission_request,

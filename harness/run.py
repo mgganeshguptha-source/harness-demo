@@ -79,6 +79,28 @@ def cmd_run(args):
     _report(run)
 
 
+def cmd_autorun(args):
+    """CI driver: run all phases end to end, auto-approving human gates.
+    The deterministic guarantees (boundaries, validation, coverage, retry cap)
+    still fully apply — only the *human* approval is automated here."""
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    sm = _build_machine(repo, real=True, model=getattr(args, "model", None))
+    max_cycles = 50
+    for _ in range(max_cycles):
+        run = sm.run_until_pause(run)
+        if run.status == "awaiting_approval":
+            print(f"  [auto-approve] gate: {run.current_phase}")
+            run = sm.resolve_gate(run, approved=True)
+        elif run.status in ("done", "halted"):
+            break
+    _report(run)
+    # exit non-zero if the harness halted (so the CI job fails visibly)
+    if run.status == "halted":
+        import sys as _sys
+        _sys.exit(1)
+
+
 def cmd_approve(args):
     repo = Path(args.repo).resolve()
     run = _load(repo)
@@ -150,6 +172,10 @@ def main():
 
     ps = sub.add_parser("status"); ps.add_argument("--repo", required=True)
     ps.set_defaults(func=cmd_status)
+
+    par = sub.add_parser("autorun"); par.add_argument("--repo", required=True)
+    par.add_argument("--model", default=None, help="override the model string")
+    par.set_defaults(func=cmd_autorun)
 
     args = p.parse_args()
     args.func(args)
