@@ -1,0 +1,41 @@
+# Harness configuration for the petclinic PoC (Windows).
+# Place this at:  spring-petclinic/.harness/config.yaml
+# (the harness reads it at validation time; defaults are used if absent)
+
+# Command the HARNESS uses to run tests (the agent never runs these).
+# Windows uses the bundled wrapper. On macOS/Linux use: "./mvnw test"
+test_command: "mvnw.cmd test"
+
+# Targeted test for a fast demo loop. Empty string => run the full suite.
+test_filter: "OwnerTest"
+
+# Kill the build if it hangs beyond this many seconds.
+test_timeout: 600
+
+# Deterministic formatting pass the HARNESS applies before running tests.
+# spring-javaformat:apply rewrites files to petclinic's required format, so the
+# validation gate tests real correctness rather than failing on whitespace.
+# Set to "" to disable.
+pre_validation_command: "mvnw.cmd spring-javaformat:apply"
+
+# When validation (mvn test) fails, loop back to this phase to fix the code,
+# carrying the failure output as feedback. Set to "" to halt instead of looping.
+validation_loopback_phase: "coding"
+
+# Max code<->test retry cycles before halting for a human (guards credit burn).
+max_validation_retries: 3
+
+# --- coverage gate ---
+# Minimum line coverage %. Set to 0 to DISABLE the coverage gate.
+# When > 0, validation fails (and loops back) if coverage is below this.
+min_coverage: 0
+# Goal that generates the JaCoCo CSV (report binds to prepare-package, so we
+# invoke it explicitly after tests).
+coverage_command: "mvnw.cmd jacoco:report"
+# Repo-relative path to the JaCoCo CSV report.
+coverage_csv: "target/site/jacoco/jacoco.csv"
+# Metric to gate on: LINE, BRANCH, INSTRUCTION, or METHOD.
+coverage_metric: "LINE"
+
+# Default model for live runs.
+model: "gpt-5-mini"

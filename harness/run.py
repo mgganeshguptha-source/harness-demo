@@ -1,0 +1,146 @@
+"""
+run.py — the harness CLI.
+
+Usage:
+  python run.py init   --repo <path> --feature PC-1-fullname --story "Add getFullName() to Owner"
+  python run.py run    --repo <path>            # drive until a gate or completion
+  python run.py approve --repo <path>           # approve current gate, continue
+  python run.py reject  --repo <path> --feedback "..."   # reject, re-run phase
+  python run.py status --repo <path>
+
+Phase 3: uses FakeAgentRunner (no SDK, no credits). Add --misbehave <phase_id> to
+watch the interlock halt the run on an out-of-bounds write.
+
+Phase 4 will add  --real  to swap in the Copilot SDK runner.
+"""
+from __future__ import annotations
+import argparse
+import sys
+from pathlib import Path
+
+from state import RunState
+from state_machine import StateMachine
+from executor import PhaseExecutor
+from fake_runner import FakeAgentRunner
+
+
+def _harness_dir(repo: Path) -> Path:
+    return repo / ".harness"
+
+
+def _build_machine(repo: Path, misbehave: str | None = None,
+                   real: bool = False, model: str | None = None) -> StateMachine:
+    if real:
+        from sdk_runner import SdkAgentRunner, DEFAULT_MODEL
+        runner = SdkAgentRunner(model=model or DEFAULT_MODEL)
+    else:
+        runner = FakeAgentRunner(misbehave_in=misbehave)
+    executor = PhaseExecutor(runner, repo_root=repo, harness_dir=_harness_dir(repo))
+    return StateMachine(executor, harness_dir=_harness_dir(repo))
+
+
+def cmd_init(args):
+    repo = Path(args.repo).resolve()
+    hd = _harness_dir(repo)
+    hd.mkdir(parents=True, exist_ok=True)
+    from phases import PHASES
+    run = RunState(feature_id=args.feature, story=args.story, current_phase=PHASES[0].id)
+    run.save(hd)
+    print(f"Initialized run for '{args.feature}' at {hd}")
+    print(f"First phase: {run.current_phase}")
+
+
+def _load(repo: Path) -> RunState:
+    run = RunState.load(_harness_dir(repo))
+    if run is None:
+        print("No run found. Run `init` first.")
+        sys.exit(2)
+    return run
+
+
+def cmd_run(args):
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    sm = _build_machine(repo, misbehave=args.misbehave,
+                        real=getattr(args, "real", False), model=getattr(args, "model", None))
+    run = sm.run_until_pause(run)
+    _report(run)
+
+
+def cmd_approve(args):
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    sm = _build_machine(repo)  # no execution here; runner choice irrelevant
+    if run.status != "awaiting_approval":
+        print(f"Nothing to approve (status: {run.status})")
+        return
+    run = sm.resolve_gate(run, approved=True)
+    print(f"Approved. Advanced to: {run.current_phase} ({run.status})")
+    print(f">>> Execute it with:  python run.py run --repo {args.repo} --real --model <model>")
+
+
+def cmd_reject(args):
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    sm = _build_machine(repo)
+    if run.status != "awaiting_approval":
+        print(f"Nothing to reject (status: {run.status})")
+        return
+    run = sm.resolve_gate(run, approved=False, feedback=args.feedback or "")
+    print(f"Rejected '{run.current_phase}'. It will re-run with your feedback on next `run`.")
+
+
+def cmd_status(args):
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    _report(run)
+
+
+def _report(run: RunState):
+    print("\n--- HARNESS STATUS ---")
+    print(f"feature : {run.feature_id}")
+    print(f"phase   : {run.current_phase}")
+    print(f"status  : {run.status}")
+    print(f"done    : {run.completed_phases}")
+    if run.status == "awaiting_approval":
+        print(f"\n>>> Phase '{run.current_phase}' awaits your review.")
+        print(">>> Run:  python run.py approve --repo <path>")
+        print(">>>   or: python run.py reject  --repo <path> --feedback \"...\"")
+    elif run.status == "halted":
+        print("\n>>> HALTED by an interlock. Inspect the log above for the reason.")
+    elif run.status == "done":
+        print("\n>>> All phases complete.")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="harness")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pi = sub.add_parser("init"); pi.add_argument("--repo", required=True)
+    pi.add_argument("--feature", required=True); pi.add_argument("--story", required=True)
+    pi.set_defaults(func=cmd_init)
+
+    pr = sub.add_parser("run"); pr.add_argument("--repo", required=True)
+    pr.add_argument("--misbehave", default=None, help="phase id to inject an out-of-bounds write")
+    pr.add_argument("--real", action="store_true", help="use the live Copilot SDK (spends credits)")
+    pr.add_argument("--model", default=None, help="override the model string")
+    pr.set_defaults(func=cmd_run)
+
+    pa = sub.add_parser("approve"); pa.add_argument("--repo", required=True)
+    pa.add_argument("--misbehave", default=None, help="phase id to inject an out-of-bounds write on the auto-continued phase")
+    pa.add_argument("--real", action="store_true", help="use the live Copilot SDK (spends credits)")
+    pa.add_argument("--model", default=None, help="override the model string")
+    pa.set_defaults(func=cmd_approve)
+
+    prj = sub.add_parser("reject"); prj.add_argument("--repo", required=True)
+    prj.add_argument("--feedback", default=""); prj.set_defaults(func=cmd_reject)
+
+    ps = sub.add_parser("status"); ps.add_argument("--repo", required=True)
+    ps.set_defaults(func=cmd_status)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
