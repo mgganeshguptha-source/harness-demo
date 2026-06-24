@@ -1,0 +1,4 @@
+﻿spring-petclinic/.harness/
+harness/__pycache__/
+**/target/
+**/__pycache__/
