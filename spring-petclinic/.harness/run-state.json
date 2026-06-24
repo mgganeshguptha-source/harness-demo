@@ -1,0 +1,29 @@
+{
+  "feature_id": "PC-1-fullname",
+  "story": "Add getFullName() to Owner returning firstName + space + lastName",
+  "current_phase": "raise_pr",
+  "status": "done",
+  "completed_phases": [
+    "context",
+    "prompt_steps",
+    "coding",
+    "unit_testing",
+    "documentation",
+    "raise_pr"
+  ],
+  "approvals": {
+    "context": "approved",
+    "prompt_steps": "approved",
+    "coding": "approved",
+    "documentation": "approved"
+  },
+  "last_feedback": null,
+  "iterations": {
+    "context": 1,
+    "prompt_steps": 2,
+    "coding": 1,
+    "unit_testing": 5,
+    "documentation": 3,
+    "raise_pr": 1
+  }
+}
