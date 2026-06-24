@@ -67,6 +67,28 @@ jobs:
           YAML
           chmod +x spring-petclinic/mvnw
 
+      - name: Copilot auth smoke test
+        working-directory: harness
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          echo "token present: ${COPILOT_GITHUB_TOKEN:+yes}"
+          copilot --version || true
+          # minimal SDK round-trip: ask one question, print the reply
+          python - <<'PY'
+          import asyncio, os
+          from copilot import CopilotClient
+          async def main():
+              has = bool(os.environ.get("COPILOT_GITHUB_TOKEN"))
+              print("has token:", has)
+              async with CopilotClient(use_logged_in_user=not has) as client:
+                  models = await client.list_models()
+                  print("models visible:", len(models))
+                  for m in models[:5]:
+                      print("  -", getattr(m, "id", m))
+          asyncio.run(main())
+          PY
+
       - name: Run the harness (all phases, auto-approve gates)
         working-directory: harness
         env:
