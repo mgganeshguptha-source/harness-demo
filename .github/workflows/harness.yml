@@ -122,6 +122,7 @@ jobs:
           name: harness-workspace
           path: |
             spring-petclinic/.harness/**
+            spring-petclinic/.github/story-context-files/**
             spring-petclinic/docs/**
 
       - name: Open pull request with the change
