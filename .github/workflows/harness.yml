@@ -12,10 +12,6 @@ on:
         description: "Copilot model to use"
         required: true
         default: "gpt-5-mini"
-      base_branch:
-        description: "Base branch the PR targets (BCBSM standard: dev)"
-        required: true
-        default: "dev"
 
 permissions:
   contents: write        # commit the change + push the branch
@@ -136,19 +132,51 @@ jobs:
             spring-petclinic/docs/**
             spring-petclinic/audit/**
 
+      - name: Commit audit trail to repo (always — success OR halt)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          cd spring-petclinic
+          FEATURE="${{ github.event.inputs.feature_id }}"
+          # A dedicated audit branch per run, so the trail is ALWAYS retained in
+          # the repo regardless of whether the harness completed or halted.
+          AUDIT_BRANCH="harness-audit/${FEATURE}-${{ github.run_id }}"
+          git config user.name "harness-bot"
+          git config user.email "harness-bot@users.noreply.github.com"
+          git checkout -b "$AUDIT_BRANCH"
+          git add audit/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No audit files to commit (collect-audit produced nothing)."
+          else
+            # Read status from run-summary.json so the commit message states the
+            # outcome and which phases are missing.
+            STATUS=$(python3 -c "import json,glob,sys; \
+              f=sorted(glob.glob('audit/*/run-summary.json')); \
+              print(json.load(open(f[-1]))['status'] if f else 'unknown')" 2>/dev/null || echo unknown)
+            git commit -m "Harness audit [$FEATURE] status=$STATUS (run ${{ github.run_id }})"
+            git push origin "$AUDIT_BRANCH"
+            echo "::notice title=Audit trail retained::Branch $AUDIT_BRANCH (status=$STATUS)"
+          fi
+
+      - name: Summarize what was retained and what's missing
+        if: always()
+        run: |
+          echo "## Harness audit summary" >> "$GITHUB_STEP_SUMMARY"
+          python3 harness/audit_summary.py spring-petclinic >> "$GITHUB_STEP_SUMMARY"
+
       - name: Open pull request with the change
         if: success()
         env:
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           cd spring-petclinic
-          BASE="${{ github.event.inputs.base_branch }}"
           BRANCH="harness/${{ github.event.inputs.feature_id }}-${{ github.run_id }}"
           git config user.name "harness-bot"
           git config user.email "harness-bot@users.noreply.github.com"
-          # base the feature branch on the target base branch (e.g. dev) so the PR
-          # diff is against that branch, matching BCBSM's dev-based flow.
-          git fetch origin "$BASE" || echo "base branch $BASE not found on origin yet"
+          # Return to the checked-out commit first (the audit step may have left us
+          # on the audit branch) so the code PR branches cleanly from the base.
+          git checkout "${{ github.sha }}" 2>/dev/null || git checkout main
           git checkout -b "$BRANCH"
           # stage real source + docs + the committed audit trail (never the
           # gitignored .harness workspace itself)
@@ -156,5 +184,5 @@ jobs:
           git commit -m "Harness: ${{ github.event.inputs.feature_id }}" || echo "nothing to commit"
           git push origin "$BRANCH"
           gh pr create --title "Harness: ${{ github.event.inputs.feature_id }}" \
-            --body-file .harness/pr-body.md --base "$BASE" --head "$BRANCH" || \
-            echo "PR creation skipped (check base branch exists / pr-body.md)"
+            --body-file .harness/pr-body.md --base main --head "$BRANCH" || \
+            echo "PR creation skipped (check pr-body.md / branch state)"
