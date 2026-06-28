@@ -12,6 +12,10 @@ on:
         description: "Copilot model to use"
         required: true
         default: "gpt-5-mini"
+      base_branch:
+        description: "Base branch the PR targets (BCBSM standard: dev)"
+        required: true
+        default: "dev"
 
 permissions:
   contents: write        # commit the change + push the branch
@@ -115,6 +119,12 @@ jobs:
           python run.py init --repo ../spring-petclinic --feature "${{ github.event.inputs.feature_id }}"
           python run.py autorun --repo ../spring-petclinic --model "${{ github.event.inputs.model }}"
 
+      - name: Collect audit trail (always, even if halted)
+        if: always()
+        working-directory: harness
+        run: |
+          python run.py collect-audit --repo ../spring-petclinic || true
+
       - name: Upload harness artifacts (audit trail)
         if: always()
         uses: actions/upload-artifact@v4
@@ -124,6 +134,7 @@ jobs:
             spring-petclinic/.harness/**
             spring-petclinic/.github/story-context-files/**
             spring-petclinic/docs/**
+            spring-petclinic/audit/**
 
       - name: Open pull request with the change
         if: success()
@@ -131,14 +142,19 @@ jobs:
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           cd spring-petclinic
+          BASE="${{ github.event.inputs.base_branch }}"
           BRANCH="harness/${{ github.event.inputs.feature_id }}-${{ github.run_id }}"
           git config user.name "harness-bot"
           git config user.email "harness-bot@users.noreply.github.com"
+          # base the feature branch on the target base branch (e.g. dev) so the PR
+          # diff is against that branch, matching BCBSM's dev-based flow.
+          git fetch origin "$BASE" || echo "base branch $BASE not found on origin yet"
           git checkout -b "$BRANCH"
-          # stage only real source + docs, never the gitignored .harness workspace
-          git add src/ docs/ 2>/dev/null || true
+          # stage real source + docs + the committed audit trail (never the
+          # gitignored .harness workspace itself)
+          git add src/ docs/ audit/ 2>/dev/null || true
           git commit -m "Harness: ${{ github.event.inputs.feature_id }}" || echo "nothing to commit"
           git push origin "$BRANCH"
           gh pr create --title "Harness: ${{ github.event.inputs.feature_id }}" \
-            --body-file .harness/pr-body.md --base main --head "$BRANCH" || \
-            echo "PR creation skipped (check pr-body.md / branch state)"
+            --body-file .harness/pr-body.md --base "$BASE" --head "$BRANCH" || \
+            echo "PR creation skipped (check base branch exists / pr-body.md)"

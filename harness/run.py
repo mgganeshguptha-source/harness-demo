@@ -124,6 +124,50 @@ def cmd_reject(args):
     print(f"Rejected '{run.current_phase}'. It will re-run with your feedback on next `run`.")
 
 
+def cmd_collect_audit(args):
+    """Collect the run's audit artifacts into audit/<feature>/ for permanent
+    retention in the repo. Gathers: the context file(s), prompt-steps.md (which
+    includes the appended EXECUTION RECORD), validation-report.txt, pr-body.md,
+    and a run-summary with token/cost totals. The PR step then commits this folder."""
+    import shutil, json
+    repo = Path(args.repo).resolve()
+    run = _load(repo)
+    feature = run.feature_id
+    audit_dir = repo / "audit" / feature
+    audit_dir.mkdir(parents=True, exist_ok=True)
+
+    hd = _harness_dir(repo)
+    ctx_dir = repo / ".github" / "story-context-files"
+
+    copied = []
+    # newest context file (the agent may write a timestamped name)
+    if ctx_dir.is_dir():
+        ctxs = sorted(ctx_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if ctxs:
+            dst = audit_dir / "context.md"
+            shutil.copy2(ctxs[0], dst); copied.append("context.md")
+    # planning + audit files from the workspace
+    for name in ("prompt-steps.md", "validation-report.txt", "pr-body.md"):
+        src = hd / name
+        if src.exists():
+            shutil.copy2(src, audit_dir / name); copied.append(name)
+
+    # a machine-readable run summary (tokens, cost, phases, status)
+    summary = {
+        "feature": feature,
+        "status": run.status,
+        "completed_phases": run.completed_phases,
+        "total_tokens": run.total_tokens,
+        "phase_token_log": run.phase_token_log,
+    }
+    (audit_dir / "run-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    copied.append("run-summary.json")
+
+    print(f"Collected audit trail into audit/{feature}/:")
+    for c in copied:
+        print(f"  - {c}")
+
+
 def cmd_status(args):
     repo = Path(args.repo).resolve()
     run = _load(repo)
@@ -212,6 +256,9 @@ def main():
     par = sub.add_parser("autorun"); par.add_argument("--repo", required=True)
     par.add_argument("--model", default=None, help="override the model string")
     par.set_defaults(func=cmd_autorun)
+
+    pca = sub.add_parser("collect-audit"); pca.add_argument("--repo", required=True)
+    pca.set_defaults(func=cmd_collect_audit)
 
     args = p.parse_args()
     args.func(args)
