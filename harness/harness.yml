@@ -71,30 +71,47 @@ jobs:
         working-directory: harness
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           echo "token present: ${COPILOT_GITHUB_TOKEN:+yes}"
+          # Report the TOKEN TYPE without leaking it: classic (ghp_) is silently
+          # rejected by Copilot CLI; fine-grained (github_pat_) is required.
+          case "$COPILOT_GITHUB_TOKEN" in
+            ghp_*)        echo "token type: CLASSIC (ghp_) -> NOT SUPPORTED by Copilot CLI" ;;
+            github_pat_*) echo "token type: fine-grained (github_pat_) -> OK type" ;;
+            *)            echo "token type: UNKNOWN prefix" ;;
+          esac
           copilot --version || true
-          # minimal SDK round-trip: ask one question, print the reply
+          # Try an explicit non-interactive CLI prompt; surfaces the real auth error.
+          copilot --prompt "say hi" --model "${{ github.event.inputs.model }}" --yes 2>&1 | head -20 || true
+          # SDK round-trip
           python - <<'PY'
           import asyncio, os
           from copilot import CopilotClient
           async def main():
               has = bool(os.environ.get("COPILOT_GITHUB_TOKEN"))
               print("has token:", has)
-              async with CopilotClient(use_logged_in_user=not has) as client:
-                  models = await client.list_models()
-                  print("models visible:", len(models))
-                  for m in models[:5]:
-                      print("  -", getattr(m, "id", m))
+              try:
+                  async with CopilotClient(use_logged_in_user=False) as client:
+                      models = await client.list_models()
+                      print("models visible:", len(models))
+                      for m in models[:5]:
+                          print("  -", getattr(m, "id", m))
+              except Exception as e:
+                  print("SDK auth error:", type(e).__name__, str(e)[:200])
           asyncio.run(main())
           PY
 
       - name: Run the harness (all phases, auto-approve gates)
         working-directory: harness
         env:
-          # CI auth: the SDK auto-detects this token; sdk_runner uses
-          # use_logged_in_user=False when it is present.
+          # CI auth: SDK detects COPILOT_GITHUB_TOKEN; the bundled CLI subprocess
+          # also checks GH_TOKEN / GITHUB_TOKEN. Set all three so whichever the
+          # child process reads, the token is there.
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           python run.py init --repo ../spring-petclinic --feature "${{ github.event.inputs.feature_id }}"
           python run.py autorun --repo ../spring-petclinic --model "${{ github.event.inputs.model }}"
