@@ -10,8 +10,13 @@ description: >
   bar — it efuses to output context with vague language like "should work
   better", "displayed properly", or "performance should be acceptable", and
   it asks targeted questions until acceptance criteria are testable. The
-  final context is written to a timestamperd file under
+  final context is written to a timestamped file under
   .github/story-context-files/, not just shown in chat.
+
+  In NON-INTERACTIVE / CI mode (no human to answer questions), the skill does
+  NOT ask questions. Instead it records every gap as a `[NEEDS CLARIFICATION]`
+  line in Section 8 of context.md and writes the file immediately. A downstream
+  harness gate blocks progression while any `[NEEDS CLARIFICATION]` remains.
 ---
 
 # Build Context Skill
@@ -84,7 +89,43 @@ back the vague phrase it's replacing.
 
 ## Workflow
 
-### 1. Check repo readiness
+### 0. Mode detection — interactive vs non-interactive (CI)
+
+**Before anything else, determine the run mode.**
+
+- **Interactive mode (default):** a human is present to answer questions (local
+  Copilot Chat, IDE, terminal). Use the full questioning workflow in steps 1–8 below.
+- **Non-interactive / CI mode:** the skill is invoked by an automated harness with
+  no human to answer (e.g. GitHub Actions). **CI mode requires an EXPLICIT positive
+  signal** — at least one of: a system/harness instruction stating the run is
+  non-interactive or "CI mode", or the invoking prompt explicitly saying "CI mode" /
+  "do not ask questions". **The mere absence of a chat channel is NOT sufficient** —
+  if you are unsure, default to interactive mode and ask.
+
+**When in non-interactive / CI mode, follow these rules instead of asking questions:**
+
+1. **Never ask a question. Never wait for input. Never block on a human.**
+2. Draft `context.md` from the story as far as it is specific enough to support.
+3. For **every gap** that you would normally ask about (steps 4–5 below), do NOT
+   guess and do NOT fill with vague language. Instead write one precise
+   `[NEEDS CLARIFICATION]` line in **Section 8 — Clarifications Needed**, naming the
+   exact missing dimension (same quality bar as the table in "Banned phrases":
+   name the missing dimension, never parrot a vague phrase).
+4. The banned-phrase rules still apply in full — a `[NEEDS CLARIFICATION]` line must
+   describe the missing dimension, not restate a vague phrase.
+5. Sections you CAN complete from the story, complete normally. Only genuinely
+   ambiguous items become `[NEEDS CLARIFICATION]`.
+6. Write the file immediately to `.github/story-context-files/` and stop. Do not
+   ask for approval.
+
+**Why:** a downstream harness gate scans the written context for
+`[NEEDS CLARIFICATION]`. If any remain, the harness halts the run and surfaces them
+to a human, who resolves them (by editing the story) and re-runs. So in CI the
+clarification loop happens *between* runs, not *during* one — but ambiguity is never
+silently guessed. The marker is the contract between this skill and the harness.
+
+---
+
 
 Before reading the story, check whether `.github/copilot-instructions.md`
 exists in the repo. This file holds the standard backend and frontend
