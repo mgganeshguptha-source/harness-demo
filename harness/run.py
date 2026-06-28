@@ -137,13 +137,27 @@ def _report(run: RunState):
     print(f"status  : {run.status}")
     print(f"done    : {run.completed_phases}")
 
-    # per-phase token breakdown with running totals (build_context = N, total so far, ...)
+    # per-phase token breakdown with running totals + cost estimate
     if run.phase_token_log:
-        print("\n  token usage by phase:")
+        print("\n  token usage & estimated cost by phase:")
+        total_credits = 0.0
+        any_unknown = False
         for e in run.phase_token_log:
-            model = f" [{e['model']}]" if e.get("model") else ""
+            model = f"[{e.get('model','')}]"
+            if e.get("included"):
+                cost = "included (0 cr)"
+            elif e.get("est_credits") is not None:
+                cost = f"~{e['est_credits']:.1f} cr (~${e['est_usd']:.4f})"
+                total_credits += e["est_credits"]
+            else:
+                cost = "rate unknown"; any_unknown = True
             print(f"    {e['phase']:<14}{model:<22} "
-                  f"{e['phase_tokens']:>7} tokens   (cumulative: {e['cumulative_tokens']})")
+                  f"{e['phase_tokens']:>7} tok   {cost}")
+        approx = "≈" if not any_unknown else "≳"
+        print(f"\n  estimated run cost: {approx} {total_credits:.1f} AI credits "
+              f"(≈ ${total_credits * 0.01:.4f})   [1 credit = $0.01]")
+        print(f"  NOTE: estimate only — included models cost 0; confirm the actual")
+        print(f"        charge via GitHub Billing (before/after credit delta).")
 
     # token + rough credit estimate (1 credit = $0.01; tokens priced per-model,
     # so this is an INDICATIVE total, not the billed amount — confirm in GitHub billing)
