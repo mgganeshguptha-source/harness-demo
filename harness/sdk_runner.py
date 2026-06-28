@@ -140,42 +140,63 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
 
 
 def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
-    """The per-phase task prompt. Phase-specific, story-aware, feedback-aware."""
+    """The per-phase task prompt. Phase-specific, story-aware, feedback-aware.
+
+    All output paths are given as ABSOLUTE paths derived from repo_root. In a
+    monorepo the agent may otherwise resolve a relative '.github/...' against the
+    git root (one level up) instead of the service folder; absolute paths remove
+    that ambiguity. We also tell the agent the directory already exists and that
+    shell is disallowed, so it writes the file directly without attempting mkdir.
+    """
     story = run.story
+    rr = str(repo_root).replace("\\", "/").rstrip("/")
+    ctx_dir = f"{rr}/.github/story-context-files"
+    plan_file = f"{rr}/.harness/prompt-steps.md"
+    src_main = f"{rr}/src/main"
+    src_test = f"{rr}/src/test"
+    docs_dir = f"{rr}/docs"
+    pr_body = f"{rr}/.harness/pr-body.md"
+
     base = {
         "context": (
             f"You are running in NON-INTERACTIVE / CI mode. Do NOT ask any questions "
             f"and do NOT wait for input. Use the build-context skill in CI mode.\n"
-            f"Explore the repository (read-only) and write a context document under "
-            f".github/story-context-files/ (timestamped name) for:\n"
+            f"Explore the repository (read-only) and write a context document as a new "
+            f"timestamped .md file in this EXACT directory (it ALREADY EXISTS, do not "
+            f"mkdir, shell is disallowed): {ctx_dir}\n"
             f"  STORY: {story}\n"
             f"Fill every section you can from the story. For any genuine ambiguity, write a "
             f"precise '[NEEDS CLARIFICATION]: <missing dimension>' line in Section 8 — do NOT "
             f"guess and do NOT use vague language. Do NOT modify any source files. "
-            f"Only write the context file under .github/story-context-files/."
+            f"Write ONLY the single context .md file in {ctx_dir}."
         ),
         "prompt_steps": (
             f"You are running in NON-INTERACTIVE / CI mode. Use the build-prompt-steps "
-            f"skill in CI mode: read the newest context file from disk in "
-            f".github/story-context-files/ (there is no chat attachment), and do not stop "
-            f"for human checkpoints.\n"
-            f"Write a numbered implementation plan to .harness/prompt-steps.md for:\n  STORY: {story}\n"
-            f"Include an 'Impacted Files' section. Only write .harness/prompt-steps.md."
+            f"skill in CI mode: read the newest context .md file from this directory on "
+            f"disk (there is no chat attachment): {ctx_dir}\n"
+            f"Do not stop for human checkpoints. Write a numbered implementation plan, "
+            f"including an 'Impacted Files' section, to this EXACT file (its parent "
+            f".harness ALREADY EXISTS, do not mkdir, shell is disallowed): {plan_file}\n"
+            f"  STORY: {story}\n"
+            f"Write ONLY {plan_file}."
         ),
         "coding": (
-            f"Implement the change described in .harness/prompt-steps.md for:\n  STORY: {story}\n"
-            f"Edit ONLY application source under src/main/. Do NOT create or edit any test files."
+            f"Implement the change described in {plan_file} for:\n  STORY: {story}\n"
+            f"Edit ONLY application source under {src_main}/. Do NOT create or edit any test files."
         ),
         "unit_testing": (
-            f"Write unit tests under src/test/ that verify:\n  STORY: {story}\n"
-            f"Do NOT modify application code under src/main/. Tests only."
+            f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
+            f"Do NOT modify application code under {src_main}/. Tests only."
         ),
         "documentation": (
-            f"Document the change under docs/ for:\n  STORY: {story}\nOnly write under docs/."
+            f"Document the change as a markdown file under {docs_dir}/ (the directory "
+            f"ALREADY EXISTS, do not mkdir, shell is disallowed) for:\n  STORY: {story}\n"
+            f"Write ONLY under {docs_dir}/."
         ),
         "raise_pr": (
             f"Summarize the change for a pull request body and write it to "
-            f".harness/pr-body.md for:\n  STORY: {story}\nOnly write .harness/pr-body.md."
+            f"this EXACT file (parent .harness ALREADY EXISTS, shell disallowed): "
+            f"{pr_body}\n  STORY: {story}\nWrite ONLY {pr_body}."
         ),
     }[phase.id]
 
