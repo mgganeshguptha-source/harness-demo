@@ -83,23 +83,22 @@ jobs:
             *)            echo "token type: UNKNOWN prefix" ;;
           esac
           copilot --version || true
-          # Try an explicit non-interactive CLI prompt; surfaces the real auth error.
-          copilot --prompt "say hi" --model "${{ github.event.inputs.model }}" --yes 2>&1 | head -20 || true
-          # SDK round-trip
+          # SDK round-trip with EXPLICIT token (the reliable CI path)
           python - <<'PY'
           import asyncio, os
           from copilot import CopilotClient
           async def main():
-              has = bool(os.environ.get("COPILOT_GITHUB_TOKEN"))
-              print("has token:", has)
+              tok = (os.environ.get("COPILOT_GITHUB_TOKEN")
+                     or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+              print("token resolved:", bool(tok), "| prefix:", (tok[:11] if tok else None))
               try:
-                  async with CopilotClient(use_logged_in_user=False) as client:
+                  async with CopilotClient(github_token=tok) as client:
                       models = await client.list_models()
                       print("models visible:", len(models))
-                      for m in models[:5]:
+                      for m in models[:8]:
                           print("  -", getattr(m, "id", m))
               except Exception as e:
-                  print("SDK auth error:", type(e).__name__, str(e)[:200])
+                  print("SDK auth error:", type(e).__name__, str(e)[:250])
           asyncio.run(main())
           PY
 
