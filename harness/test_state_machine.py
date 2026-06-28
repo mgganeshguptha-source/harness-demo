@@ -17,15 +17,25 @@ from state_machine import StateMachine
 
 
 class ScriptedExecutor:
-    """Returns codes from a script keyed by phase id; default OK."""
-    def __init__(self, script=None):
+    """Returns codes from a script keyed by phase id; default OK.
+    Also writes a clean context file when the context phase runs, so the
+    clarification gate (which scans .github/story-context-files/) passes."""
+    def __init__(self, script=None, context_clarifications=False):
         self.script = script or {}
         self.calls = []
+        self.context_clarifications = context_clarifications
+        self.repo_root = None  # set by tests that need the gate
 
     def run_phase(self, phase, run):
         self.calls.append(phase.id)
+        if phase.id == "context" and self.repo_root is not None:
+            cd = self.repo_root / ".github" / "story-context-files"
+            cd.mkdir(parents=True, exist_ok=True)
+            body = "## Section 8\n"
+            body += ("- [NEEDS CLARIFICATION]: example gap\n"
+                     if self.context_clarifications else "None. All criteria testable.\n")
+            (cd / "context.md").write_text(body, encoding="utf-8")
         code = self.script.get(phase.id, ExitCode.OK)
-        # support a list to return different codes on repeated calls (reject then ok)
         if isinstance(code, list):
             code = code.pop(0) if code else ExitCode.OK
         return code
@@ -39,8 +49,11 @@ def _fail_validator(repo, hd, log): return _FakeVR(False)
 
 
 def _sm(ex, hd, validator=_pass_validator):
-    # default to a PASSING validator so scripted tests never shell out to mvn
-    return StateMachine(ex, hd, log=lambda *a: None, validator=validator)
+    # default to a PASSING validator so scripted tests never shell out to mvn.
+    # point the executor at the temp repo so the context file (for the
+    # clarification gate) is written under it. hd is <repo>/.harness, so repo = hd.parent
+    ex.repo_root = hd.parent
+    return StateMachine(ex, hd, repo_root=hd.parent, log=lambda *a: None, validator=validator)
 
 
 def _new_run(tmp):
@@ -193,6 +206,20 @@ def test_state_persists_and_reloads():
         assert reloaded is not None
         assert reloaded.current_phase == "context"
         assert reloaded.status == "awaiting_approval"
+
+
+def test_clarification_gate_halts_needs_input():
+    """Unresolved [NEEDS CLARIFICATION] in context => needs_input, no prompt_steps."""
+    with tempfile.TemporaryDirectory() as d:
+        hd = Path(d)
+        ex = ScriptedExecutor(context_clarifications=True)  # context writes a marker
+        sm = _sm(ex, hd)
+        run = _new_run(hd)
+        run = sm.run_until_pause(run)
+        # context ran, gate found a marker -> needs_input, stays on context
+        assert run.status == "needs_input", run.status
+        assert run.current_phase == "context"
+        assert "prompt_steps" not in run.completed_phases
 
 
 if __name__ == "__main__":

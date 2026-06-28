@@ -27,6 +27,11 @@ class RunState:
     iterations: dict = field(default_factory=dict)
     # how many times validation has failed and looped back (retry cap bookkeeping)
     validation_attempts: int = 0
+    # cumulative token usage across all phases (for credit estimation)
+    total_tokens: dict = field(default_factory=dict)
+    # per-phase token usage + the model used, in execution order, for the
+    # phase-by-phase report (build_context = N tokens, running total, ...).
+    phase_token_log: list = field(default_factory=list)
 
     # ---- persistence ----
     def save(self, harness_dir: Path) -> None:

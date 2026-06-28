@@ -41,5 +41,47 @@ coverage_metric: "LINE"
 # In production an MCP/Jira step writes this file; for the demo it's committed.
 story_file: "stories/current-story.md"
 
-# Default model for live runs.
+# ---- selective capability loading ----
+# false => load ALL skills/instructions every phase (more tokens).
+# true  => always-on guardrails (applyTo "**") + phase-relevant files only.
+selective_capability: true
+
+# Which stacks this repo contains. Instruction subfolders NOT listed are
+# excluded entirely. A backend-only repo (like a Spring Boot service) lists
+# only "backend" — angular-frontend/ and mobile-frontend/ instructions are
+# never loaded. Cross-cutting files directly under instructions/ (hipaa,
+# logging-standards, prompt-injection, output-naming) always load.
+# Use ["*"] or [] to include all stacks (e.g. a full-stack repo).
+repo_stacks: ["backend"]
+
+# Files each phase is concerned with. An instruction loads in a phase if its
+# applyTo glob intersects this scope. applyTo "**" files always load.
+phase_file_scope:
+  context: ["src/main/java/**", "src/main/**"]
+  prompt_steps: ["src/main/java/**", "src/main/**"]
+  coding: ["src/main/java/**"]
+  unit_testing: ["src/test/java/**"]
+  documentation: ["docs/**"]
+  raise_pr: []
+
+# Which named skills (folder under .github/skills) load in which phase.
+phase_skills:
+  context: ["build-context", "analyze-service"]
+  prompt_steps: ["build-prompt-steps"]
+  coding: ["security-review"]
+  unit_testing: []
+  documentation: []
+  raise_pr: []
+
+# Default model for live runs (fallback when a phase has no specific model).
 model: "gpt-5-mini"
+
+# Per-phase model override. A phase uses its entry here if present, else `model`.
+# Put cheap models on simple phases, stronger models where it matters.
+phase_models:
+  context: "gpt-5-mini"
+  prompt_steps: "gpt-5-mini"
+  coding: "claude-sonnet-4.6"
+  unit_testing: "gpt-5-mini"
+  documentation: "gpt-5-mini"
+  raise_pr: "gpt-5-mini"

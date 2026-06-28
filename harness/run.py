@@ -92,11 +92,11 @@ def cmd_autorun(args):
         if run.status == "awaiting_approval":
             print(f"  [auto-approve] gate: {run.current_phase}")
             run = sm.resolve_gate(run, approved=True)
-        elif run.status in ("done", "halted"):
+        elif run.status in ("done", "halted", "needs_input"):
             break
     _report(run)
-    # exit non-zero if the harness halted (so the CI job fails visibly)
-    if run.status == "halted":
+    # exit non-zero if the harness halted or needs human input (CI job fails visibly)
+    if run.status in ("halted", "needs_input"):
         import sys as _sys
         _sys.exit(1)
 
@@ -136,12 +136,34 @@ def _report(run: RunState):
     print(f"phase   : {run.current_phase}")
     print(f"status  : {run.status}")
     print(f"done    : {run.completed_phases}")
+
+    # per-phase token breakdown with running totals (build_context = N, total so far, ...)
+    if run.phase_token_log:
+        print("\n  token usage by phase:")
+        for e in run.phase_token_log:
+            model = f" [{e['model']}]" if e.get("model") else ""
+            print(f"    {e['phase']:<14}{model:<22} "
+                  f"{e['phase_tokens']:>7} tokens   (cumulative: {e['cumulative_tokens']})")
+
+    # token + rough credit estimate (1 credit = $0.01; tokens priced per-model,
+    # so this is an INDICATIVE total, not the billed amount — confirm in GitHub billing)
+    tk = run.total_tokens or {}
+    tin, tout = tk.get("input", 0), tk.get("output", 0)
+    if tin or tout:
+        print(f"\n  totals: input={tin} output={tout} "
+              f"cache_read={tk.get('cache_read', 0)} reasoning={tk.get('reasoning', 0)}")
+        print(f"          total billable tokens (in+out) = {tin + tout}")
+        print(f"          (see GitHub Billing for the exact AI-credit charge)")
+
     if run.status == "awaiting_approval":
         print(f"\n>>> Phase '{run.current_phase}' awaits your review.")
         print(">>> Run:  python run.py approve --repo <path>")
         print(">>>   or: python run.py reject  --repo <path> --feedback \"...\"")
     elif run.status == "halted":
         print("\n>>> HALTED by an interlock. Inspect the log above for the reason.")
+    elif run.status == "needs_input":
+        print("\n>>> NEEDS INPUT: the context has unresolved [NEEDS CLARIFICATION] items.")
+        print(">>> Resolve them in the story, then re-run from the context phase.")
     elif run.status == "done":
         print("\n>>> All phases complete.")
 
