@@ -89,14 +89,27 @@ class PhaseExecutor:
             cumulative = (run.total_tokens.get("input", 0) or 0) + (run.total_tokens.get("output", 0) or 0)
             from config import HarnessConfig as _HC
             _cfg = _HC.load(self.harness_dir)
+            _model = _cfg.model_for_phase(phase.id) if _cfg else ""
+            _in = result.tokens.get("input", 0) or 0
+            _out = result.tokens.get("output", 0) or 0
+            est = _cfg.estimate_cost(_model, _in, _out) if _cfg else {"credits": None, "usd": None, "included": False}
             run.phase_token_log.append({
                 "phase": phase.id,
-                "model": _cfg.model_for_phase(phase.id) if _cfg else "",
+                "model": _model,
                 "phase_tokens": phase_io,
                 "cumulative_tokens": cumulative,
+                "est_credits": est.get("credits"),
+                "est_usd": est.get("usd"),
+                "included": est.get("included", False),
             })
+            if est.get("included"):
+                cost_str = "included (0 credits)"
+            elif est.get("credits") is not None:
+                cost_str = f"~{est['credits']:.1f} credits (~${est['usd']:.4f})"
+            else:
+                cost_str = "rate unknown"
             self.log(f"  [tokens] {phase.id}: {phase_io} tokens "
-                     f"(running total: {cumulative})")
+                     f"(running total: {cumulative}) | est cost: {cost_str}")
 
         if result.errored:
             self.log(f"  ! runner error: {result.error_msg}")

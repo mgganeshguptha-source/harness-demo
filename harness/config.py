@@ -30,6 +30,23 @@ class HarnessConfig:
     # else falls back to `model`. Put cheap models on simple phases, stronger
     # models on coding/testing.
     phase_models: dict = field(default_factory=dict)
+    # --- cost estimation (token -> credit -> $) ---
+    # Published Copilot per-1M-token rates [input_usd, output_usd]. 1 credit=$0.01.
+    # ESTIMATE only; authoritative charge is GitHub's billing page. Verify at
+    # docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+    model_rates: dict = field(default_factory=lambda: {
+        "gpt-5-mini":        [0.25, 2.00],
+        "gpt-4.1":           [0.0, 0.0],
+        "gpt-5.4":           [2.50, 15.00],
+        "gpt-5.4-mini":      [0.25, 2.00],
+        "gpt-5.3-codex":     [2.50, 15.00],
+        "claude-haiku-4.5":  [1.00, 5.00],
+        "claude-sonnet-4.5": [3.00, 15.00],
+        "claude-sonnet-4.6": [3.00, 15.00],
+        "gemini-3.5-flash":  [0.30, 2.50],
+    })
+    # Models INCLUDED on paid plans — consume zero credits regardless of tokens.
+    included_models: list = field(default_factory=lambda: ["gpt-5-mini", "gpt-4.1"])
     # Deterministic normalization run by the HARNESS before validation.
     # spring-javaformat:apply rewrites files to the project's required format.
     # Empty string => skip. This is a fixed, known goal — not arbitrary execution.
@@ -104,6 +121,8 @@ class HarnessConfig:
             test_timeout=int(data.get("test_timeout", cls.test_timeout)),
             model=data.get("model", cls.model),
             phase_models=data.get("phase_models") or {},
+            model_rates=data.get("model_rates") or cls().model_rates,
+            included_models=data.get("included_models") or cls().included_models,
             pre_validation_command=data.get("pre_validation_command", cls.pre_validation_command),
             validation_loopback_phase=data.get("validation_loopback_phase", cls.validation_loopback_phase),
             max_validation_retries=int(data.get("max_validation_retries", cls.max_validation_retries)),
@@ -122,6 +141,19 @@ class HarnessConfig:
     def model_for_phase(self, phase_id: str) -> str:
         """Model for a phase: phase_models[phase_id] if set, else the default."""
         return (self.phase_models or {}).get(phase_id, self.model)
+
+    def estimate_cost(self, model: str, input_tokens: int, output_tokens: int) -> dict:
+        """Estimate credits + USD for a token count on a model.
+        Returns {credits, usd, included}. 1 credit = $0.01.
+        Cached tokens are treated as input here (conservative simplification)."""
+        if model in (self.included_models or []):
+            return {"credits": 0.0, "usd": 0.0, "included": True}
+        rates = (self.model_rates or {}).get(model)
+        if not rates:
+            return {"credits": None, "usd": None, "included": False}
+        in_rate, out_rate = rates[0], rates[1]
+        usd = (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000.0
+        return {"credits": usd / 0.01, "usd": usd, "included": False}
 
     def resolved_test_command(self) -> str:
         """Build the actual command string, applying the targeted filter if set."""
