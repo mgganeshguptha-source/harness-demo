@@ -144,6 +144,13 @@ public class Owner extends Person {
 		return null;
 	}
 
+	public boolean hasPet(String name) {
+		if (name == null) {
+			return false;
+		}
+		return getPet(name) != null;
+	}
+
 	@Override
 	public String toString() {
 		return new ToStringCreator(this).append("id", this.getId())
