@@ -94,6 +94,24 @@ class StateMachine:
             if phase.id not in run.completed_phases:
                 run.completed_phases.append(phase.id)
 
+            # ---- CLARIFICATION GATE ----
+            # After the context phase, scan for [NEEDS CLARIFICATION] markers.
+            # Any remaining => the story is ambiguous => halt for human input,
+            # do NOT proceed to prompt_steps.
+            if getattr(phase, "scan_clarifications", False):
+                from clarification import scan_clarifications as _scan
+                from config import HarnessConfig as _HC
+                _cfg = _HC.load(self.harness_dir)
+                cr = _scan(self.repo_root, _cfg.context_output_dir)
+                if not cr.clear:
+                    self.log(f"  ! NEEDS_CLARIFICATION — {len(cr.items)} item(s) unresolved in {cr.scanned_file}")
+                    for it in cr.items:
+                        self.log("      • " + it)
+                    run.status = "needs_input"
+                    run.save(self.harness_dir)
+                    return run
+                self.log("  [harness] clarification gate: clear (no open items)")
+
             # ---- DETERMINISTIC VALIDATION GATE ----
             # The harness (not the agent) runs the tests. Red => halt before advancing.
             if phase.validate_after:
@@ -165,6 +183,13 @@ class StateMachine:
         if approved:
             run.approvals[phase.id] = "approved"
             run.last_feedback = None
+            # stamp the execution record with the human's approval (coding phase)
+            if getattr(phase, "record_execution", False):
+                try:
+                    from execution_record import stamp_approval
+                    stamp_approval(self.harness_dir / "prompt-steps.md", True)
+                except Exception:
+                    pass
             nxt = next_phase(phase.id)
             if nxt is None:
                 run.status = "done"
@@ -174,6 +199,12 @@ class StateMachine:
         else:
             run.approvals[phase.id] = "rejected"
             run.last_feedback = feedback
+            if getattr(phase, "record_execution", False):
+                try:
+                    from execution_record import stamp_approval
+                    stamp_approval(self.harness_dir / "prompt-steps.md", False, feedback)
+                except Exception:
+                    pass
             run.status = "running"   # re-run the same phase with feedback
         run.save(self.harness_dir)
         return run

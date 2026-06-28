@@ -35,23 +35,107 @@ from boundaries import is_write_allowed, deny_reason
 DEFAULT_MODEL = "gpt-4.1"
 
 
-def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
-    """Pull in .github/skills + .github/instructions as the capability layer.
+def _parse_frontmatter_applyto(text: str) -> str | None:
+    """Extract the applyTo value from an instruction file's YAML frontmatter.
+    Returns the raw glob string (may be comma-separated), or None if absent."""
+    if not text.startswith("---"):
+        return None
+    end = text.find("---", 3)
+    if end == -1:
+        return None
+    fm = text[3:end]
+    for line in fm.splitlines():
+        line = line.strip()
+        if line.startswith("applyTo:"):
+            val = line.split(":", 1)[1].strip().strip('"').strip("'")
+            return val
+    return None
 
-    Best-effort: if the files don't exist, we proceed with the base prompt.
-    We keep this simple — concatenate any instruction markdown relevant to the
-    phase. Your existing toolkit files slot in here unchanged.
+
+def _glob_intersects_scope(apply_to: str, scope_globs: list) -> bool:
+    """Does an instruction's applyTo intersect the phase's file scope?
+    '**' always matches (always-on guardrail). Otherwise check prefix overlap
+    between the applyTo patterns and the phase scope patterns."""
+    patterns = [p.strip() for p in apply_to.split(",") if p.strip()]
+    for pat in patterns:
+        if pat == "**":
+            return True
+        # reduce a glob to its literal directory prefix for a coarse overlap test
+        pat_prefix = pat.split("*", 1)[0].rstrip("/")
+        for sc in scope_globs:
+            sc_prefix = sc.split("*", 1)[0].rstrip("/")
+            if not pat_prefix or not sc_prefix:
+                continue
+            if pat_prefix.startswith(sc_prefix) or sc_prefix.startswith(pat_prefix):
+                return True
+    return False
+
+
+def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
+    """Load the capability layer for THIS phase.
+
+    Config-driven (HarnessConfig):
+      - selective_capability=False -> load everything (legacy behaviour).
+      - always-on guardrails: instruction files with applyTo "**".
+      - phase-scoped instructions: applyTo glob intersects phase_file_scope[phase].
+      - phase skills: the named skills in phase_skills[phase].
+
+    This keeps cross-cutting guardrails (HIPAA, prompt-injection, logging,
+    output-naming) in EVERY phase, while stack/phase-specific rules and skills
+    load only where relevant — cutting tokens without dropping safety rules.
     """
-    chunks = []
+    from config import HarnessConfig
+    cfg = HarnessConfig.load(repo_root / ".harness")
     gh = repo_root / ".github"
-    for sub in ("instructions", "skills"):
-        d = gh / sub
-        if d.is_dir():
-            for md in sorted(d.rglob("*.md")):
-                try:
-                    chunks.append(f"\n--- {sub}/{md.name} ---\n" + md.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+    chunks = []
+
+    # ---- instructions ----
+    instr_dir = gh / "instructions"
+    if instr_dir.is_dir():
+        scope = cfg.phase_file_scope.get(phase.id, []) if cfg.selective_capability else None
+        stacks = cfg.repo_stacks or []
+        include_all_stacks = (not stacks) or ("*" in stacks)
+        for md in sorted(instr_dir.rglob("*.md")):
+            # REPO-LEVEL STACK FILTER: if this file sits in a stack subfolder
+            # (backend/, angular-frontend/, mobile-frontend/) that this repo does
+            # not contain, skip it entirely — before any phase logic. Files
+            # directly under instructions/ have no stack subfolder => always kept.
+            rel_parent = md.parent.relative_to(instr_dir)
+            stack_folder = rel_parent.parts[0] if rel_parent.parts else None
+            if (cfg.selective_capability and not include_all_stacks
+                    and stack_folder is not None and stack_folder not in stacks):
+                continue
+            try:
+                text = md.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if cfg.selective_capability:
+                apply_to = _parse_frontmatter_applyto(text)
+                # no applyTo -> treat as always-on (safe default)
+                if apply_to is None or apply_to == "**":
+                    pass  # always-on guardrail
+                elif _glob_intersects_scope(apply_to, scope):
+                    pass  # relevant to this phase
+                else:
+                    continue  # skip — not relevant to this phase
+            chunks.append(f"\n--- instructions/{md.name} ---\n{text}")
+
+    # ---- skills ----
+    skills_dir = gh / "skills"
+    if skills_dir.is_dir():
+        if cfg.selective_capability:
+            wanted = set(cfg.phase_skills.get(phase.id, []))
+        else:
+            wanted = None  # all
+        for skill_md in sorted(skills_dir.rglob("SKILL.md")):
+            skill_name = skill_md.parent.name
+            if wanted is not None and skill_name not in wanted:
+                continue
+            try:
+                chunks.append(f"\n--- skill: {skill_name} ---\n" + skill_md.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
     return "\n".join(chunks)
 
 
@@ -60,14 +144,22 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
     story = run.story
     base = {
         "context": (
-            f"Explore the repository (read-only) and write a concise context document "
-            f"to .harness/context.md describing exactly which files must change to implement:\n"
+            f"You are running in NON-INTERACTIVE / CI mode. Do NOT ask any questions "
+            f"and do NOT wait for input. Use the build-context skill in CI mode.\n"
+            f"Explore the repository (read-only) and write a context document under "
+            f".github/story-context-files/ (timestamped name) for:\n"
             f"  STORY: {story}\n"
-            f"Do NOT modify any source files in this phase. Only write .harness/context.md."
+            f"Fill every section you can from the story. For any genuine ambiguity, write a "
+            f"precise '[NEEDS CLARIFICATION]: <missing dimension>' line in Section 8 — do NOT "
+            f"guess and do NOT use vague language. Do NOT modify any source files. "
+            f"Only write the context file under .github/story-context-files/."
         ),
         "prompt_steps": (
-            f"Based on .harness/context.md, write a numbered implementation plan to "
-            f".harness/prompt-steps.md for:\n  STORY: {story}\n"
+            f"You are running in NON-INTERACTIVE / CI mode. Use the build-prompt-steps "
+            f"skill in CI mode: read the newest context file from disk in "
+            f".github/story-context-files/ (there is no chat attachment), and do not stop "
+            f"for human checkpoints.\n"
+            f"Write a numbered implementation plan to .harness/prompt-steps.md for:\n  STORY: {story}\n"
             f"Include an 'Impacted Files' section. Only write .harness/prompt-steps.md."
         ),
         "coding": (
@@ -160,6 +252,12 @@ class SdkAgentRunner:
         task = _phase_instruction(phase, run, repo_root)
         full_prompt = (capability + "\n\n" if capability else "") + task
 
+        # per-phase model: config phase_models[phase_id] overrides the default model.
+        from config import HarnessConfig as _HC
+        _cfg = _HC.load(repo_root / ".harness")
+        phase_model = (_cfg.model_for_phase(phase.id) if _cfg else None) or self.model
+        self.log(f"  [model] phase '{phase.id}' -> {phase_model}")
+
         # working_directory scopes the agent to the petclinic repo so writes match
         # our globs. use_logged_in_user=True rides on your authed Copilot CLI (Pro).
         async with CopilotClient(
@@ -168,16 +266,29 @@ class SdkAgentRunner:
         ) as client:
             async with await client.create_session(
                 on_permission_request=on_permission_request,
-                model=self.model,
+                model=phase_model,
             ) as session:
                 done = asyncio.Event()
                 last_message = {"text": ""}
+                usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "reasoning": 0}
 
                 def on_event(event):
                     t = event.type.value
                     if t == "assistant.message":
                         try:
                             last_message["text"] = event.data.content or ""
+                        except Exception:
+                            pass
+                    elif t == "assistant.usage":
+                        # LLM token-usage metrics for this turn — accumulate them so
+                        # the harness can report per-run credit consumption.
+                        try:
+                            d = event.data
+                            usage["input"] += getattr(d, "input_tokens", 0) or 0
+                            usage["output"] += getattr(d, "output_tokens", 0) or 0
+                            usage["cache_read"] += getattr(d, "cache_read_tokens", 0) or 0
+                            usage["cache_write"] += getattr(d, "cache_write_tokens", 0) or 0
+                            usage["reasoning"] += getattr(d, "reasoning_tokens", 0) or 0
                         except Exception:
                             pass
                     elif t == "session.idle":
@@ -190,4 +301,14 @@ class SdkAgentRunner:
                 if last_message["text"]:
                     self.log("  [agent] " + last_message["text"][:500])
 
-        return AgentResult(attempted_writes=attempted_writes, iterations_used=1)
+                # report token usage for this phase
+                total = usage["input"] + usage["output"]
+                if total > 0:
+                    self.log(f"  [tokens] phase '{phase.id}': "
+                             f"in={usage['input']} out={usage['output']} "
+                             f"cache_r={usage['cache_read']} reasoning={usage['reasoning']}")
+                # stash on the result so the orchestrator can aggregate
+                self._last_usage = usage
+
+        return AgentResult(attempted_writes=attempted_writes, iterations_used=1,
+                           tokens=getattr(self, "_last_usage", {}))

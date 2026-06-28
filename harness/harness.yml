@@ -1,0 +1,127 @@
+name: Harness Engineering Demo
+
+# Manual trigger — click "Run workflow" in the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      feature_id:
+        description: "Feature id for this run (e.g. PC-2-haspet)"
+        required: true
+        default: "PC-2-haspet"
+      model:
+        description: "Copilot model to use"
+        required: true
+        default: "gpt-5-mini"
+
+permissions:
+  contents: write        # commit the change + push the branch
+  pull-requests: write   # open the PR
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Node (for Copilot CLI bundled by the SDK)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Install harness Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install github-copilot-sdk pyyaml
+
+      - name: Seed harness workspace config (Linux mvnw)
+        run: |
+          mkdir -p spring-petclinic/.harness
+          cat > spring-petclinic/.harness/config.yaml <<'YAML'
+          test_command: "./mvnw test"
+          test_filter: ""
+          test_timeout: 1200
+          pre_validation_command: "./mvnw spring-javaformat:apply"
+          validation_loopback_phase: "coding"
+          max_validation_retries: 3
+          min_coverage: 0
+          coverage_command: "./mvnw jacoco:report"
+          coverage_csv: "target/site/jacoco/jacoco.csv"
+          coverage_metric: "LINE"
+          story_file: "stories/current-story.md"
+          model: "${{ github.event.inputs.model }}"
+          YAML
+          chmod +x spring-petclinic/mvnw
+
+      - name: Copilot auth smoke test
+        working-directory: harness
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          echo "token present: ${COPILOT_GITHUB_TOKEN:+yes}"
+          copilot --version || true
+          # minimal SDK round-trip: ask one question, print the reply
+          python - <<'PY'
+          import asyncio, os
+          from copilot import CopilotClient
+          async def main():
+              has = bool(os.environ.get("COPILOT_GITHUB_TOKEN"))
+              print("has token:", has)
+              async with CopilotClient(use_logged_in_user=not has) as client:
+                  models = await client.list_models()
+                  print("models visible:", len(models))
+                  for m in models[:5]:
+                      print("  -", getattr(m, "id", m))
+          asyncio.run(main())
+          PY
+
+      - name: Run the harness (all phases, auto-approve gates)
+        working-directory: harness
+        env:
+          # CI auth: the SDK auto-detects this token; sdk_runner uses
+          # use_logged_in_user=False when it is present.
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          python run.py init --repo ../spring-petclinic --feature "${{ github.event.inputs.feature_id }}"
+          python run.py autorun --repo ../spring-petclinic --model "${{ github.event.inputs.model }}"
+
+      - name: Upload harness artifacts (audit trail)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-workspace
+          path: |
+            spring-petclinic/.harness/**
+            spring-petclinic/docs/**
+
+      - name: Open pull request with the change
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          cd spring-petclinic
+          BRANCH="harness/${{ github.event.inputs.feature_id }}-${{ github.run_id }}"
+          git config user.name "harness-bot"
+          git config user.email "harness-bot@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          # stage only real source + docs, never the gitignored .harness workspace
+          git add src/ docs/ 2>/dev/null || true
+          git commit -m "Harness: ${{ github.event.inputs.feature_id }}" || echo "nothing to commit"
+          git push origin "$BRANCH"
+          gh pr create --title "Harness: ${{ github.event.inputs.feature_id }}" \
+            --body-file .harness/pr-body.md --base main --head "$BRANCH" || \
+            echo "PR creation skipped (check pr-body.md / branch state)"

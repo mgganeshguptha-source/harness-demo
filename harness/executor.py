@@ -33,6 +33,7 @@ class AgentResult:
     iterations_used: int = 1
     errored: bool = False
     error_msg: str = ""
+    tokens: dict = field(default_factory=dict)  # token usage for this phase
 
 
 class AgentRunner(Protocol):
@@ -78,6 +79,25 @@ class PhaseExecutor:
 
         run.iterations[phase.id] = used + result.iterations_used
 
+        # accumulate token usage for per-run credit reporting
+        if result.tokens:
+            for k, v in result.tokens.items():
+                run.total_tokens[k] = run.total_tokens.get(k, 0) + (v or 0)
+
+            # per-phase entry: this phase's in+out, plus running cumulative total
+            phase_io = (result.tokens.get("input", 0) or 0) + (result.tokens.get("output", 0) or 0)
+            cumulative = (run.total_tokens.get("input", 0) or 0) + (run.total_tokens.get("output", 0) or 0)
+            from config import HarnessConfig as _HC
+            _cfg = _HC.load(self.harness_dir)
+            run.phase_token_log.append({
+                "phase": phase.id,
+                "model": _cfg.model_for_phase(phase.id) if _cfg else "",
+                "phase_tokens": phase_io,
+                "cumulative_tokens": cumulative,
+            })
+            self.log(f"  [tokens] {phase.id}: {phase_io} tokens "
+                     f"(running total: {cumulative})")
+
         if result.errored:
             self.log(f"  ! runner error: {result.error_msg}")
             return ExitCode.SDK_ERROR
@@ -94,5 +114,20 @@ class PhaseExecutor:
             if not artifact.exists():
                 self.log(f"  ! required artifact missing: {phase.required_artifact}")
                 return ExitCode.ARTIFACT_MISSING
+
+        # --- EXECUTION RECORD: append actual-vs-approved audit to the plan ---
+        if getattr(phase, "record_execution", False):
+            try:
+                from execution_record import append_execution_record
+                plan_file = self.harness_dir / "prompt-steps.md"
+                summary = append_execution_record(
+                    plan_file, self.repo_root, result.attempted_writes, phase.id)
+                if summary["scope_additions"]:
+                    self.log("  [harness] ⚠ SCOPE ADDITION recorded (review at gate): "
+                             + ", ".join(summary["scope_additions"]))
+                else:
+                    self.log("  [harness] execution record appended (scope matches plan)")
+            except Exception as e:
+                self.log(f"  [harness] execution record error: {e}")
 
         return ExitCode.OK

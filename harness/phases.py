@@ -44,6 +44,13 @@ class Phase:
     # Deterministic setup so the agent never needs shell to mkdir. These dirs must
     # fall within the phase's allowed_writes.
     pre_create_dirs: tuple = field(default_factory=tuple)
+    # If True, after this phase the harness scans the context output for
+    # [NEEDS CLARIFICATION] markers and halts (needs_input) if any remain.
+    scan_clarifications: bool = False
+    # If True, after this phase the harness appends an EXECUTION RECORD to the
+    # plan audit file (actual files touched vs approved Impacted Files; flags
+    # scope additions). Used on the coding phase.
+    record_execution: bool = False
 
 
 # ---- THE SPINE ----------------------------------------------------------
@@ -55,10 +62,13 @@ PHASES = (
         id="context",
         title="Story -> Context building",
         kind=PhaseKind.MODEL,
-        allowed_writes=(".harness/**",),          # may ONLY write workspace files
-        required_artifact=".harness/context.md",
+        # Real toolkit output path (copilot-output-naming convention) + workspace.
+        allowed_writes=(".github/story-context-files/**", ".harness/**"),
+        required_artifact=None,   # checked via clarification scan instead of fixed name
         human_gate=True,                            # -> review context
         max_iterations=6,
+        pre_create_dirs=(".github/story-context-files",),
+        scan_clarifications=True,                   # gate on [NEEDS CLARIFICATION]
     ),
     Phase(
         id="prompt_steps",
@@ -78,6 +88,7 @@ PHASES = (
         required_artifact=None,
         human_gate=True,                            # -> review code
         max_iterations=10,
+        record_execution=True,                      # append actual-vs-approved audit
     ),
     Phase(
         id="unit_testing",
