@@ -209,17 +209,6 @@ class SdkAgentRunner:
             PermissionDecisionReject,
         )
 
-        # Auth mode: in CI a Copilot token env var is set (COPILOT_GITHUB_TOKEN /
-        # GH_TOKEN / GITHUB_TOKEN). When present, do NOT use stored login — the SDK
-        # picks up the token automatically. Locally (no token), use the logged-in
-        # user (your interactive Copilot CLI session).
-        has_ci_token = bool(
-            os.environ.get("COPILOT_GITHUB_TOKEN")
-            or os.environ.get("GH_TOKEN")
-            or os.environ.get("GITHUB_TOKEN")
-        )
-        use_logged_in = not has_ci_token
-
         attempted_writes: list[str] = []
 
         # ---- THE INTERLOCK (real-time, at the SDK) ----
@@ -260,10 +249,22 @@ class SdkAgentRunner:
 
         # working_directory scopes the agent to the petclinic repo so writes match
         # our globs. use_logged_in_user=True rides on your authed Copilot CLI (Pro).
-        async with CopilotClient(
-            working_directory=str(repo_root),
-            use_logged_in_user=use_logged_in,
-        ) as client:
+        # Auth: pass the token EXPLICITLY to the client (the reliable path).
+        # Env-var auto-detection doesn't always propagate to the spawned CLI
+        # subprocess in CI, so we read it here and hand it to CopilotClient via
+        # github_token=. When a token is present, the SDK sets use_logged_in_user
+        # to False automatically. Locally (no token), fall back to logged-in user.
+        ci_token = (os.environ.get("COPILOT_GITHUB_TOKEN")
+                    or os.environ.get("GH_TOKEN")
+                    or os.environ.get("GITHUB_TOKEN"))
+
+        client_kwargs = {"working_directory": str(repo_root)}
+        if ci_token:
+            client_kwargs["github_token"] = ci_token
+        else:
+            client_kwargs["use_logged_in_user"] = True
+
+        async with CopilotClient(**client_kwargs) as client:
             async with await client.create_session(
                 on_permission_request=on_permission_request,
                 model=phase_model,
@@ -271,17 +272,19 @@ class SdkAgentRunner:
                 done = asyncio.Event()
                 last_message = {"text": ""}
                 usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "reasoning": 0}
+                seen_events = {}
+                errors = []
 
                 def on_event(event):
                     t = event.type.value
+                    # DIAGNOSTIC: count every event type so we can see what the SDK emits in CI
+                    seen_events[t] = seen_events.get(t, 0) + 1
                     if t == "assistant.message":
                         try:
                             last_message["text"] = event.data.content or ""
                         except Exception:
                             pass
                     elif t == "assistant.usage":
-                        # LLM token-usage metrics for this turn — accumulate them so
-                        # the harness can report per-run credit consumption.
                         try:
                             d = event.data
                             usage["input"] += getattr(d, "input_tokens", 0) or 0
@@ -291,12 +294,29 @@ class SdkAgentRunner:
                             usage["reasoning"] += getattr(d, "reasoning_tokens", 0) or 0
                         except Exception:
                             pass
-                    elif t == "session.idle":
+                    elif "error" in t.lower():
+                        # capture any error-type event so failures aren't silent
+                        try:
+                            errors.append(f"{t}: {getattr(event.data, 'message', str(event.data))[:300]}")
+                        except Exception:
+                            errors.append(t)
+                    # terminal events: idle OR any completion-style event ends the turn
+                    if t in ("session.idle", "session.completed", "turn.completed", "session.error"):
                         done.set()
 
                 session.on(on_event)
                 await session.send(full_prompt)
-                await done.wait()
+                # guard against hanging forever if no terminal event arrives
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=300)
+                except asyncio.TimeoutError:
+                    self.log("  [diag] timed out waiting for a terminal event")
+
+                # DIAGNOSTICS — what did the SDK actually emit?
+                self.log(f"  [diag] events seen: {seen_events}")
+                if errors:
+                    for e in errors:
+                        self.log(f"  [diag] ERROR EVENT: {e}")
 
                 if last_message["text"]:
                     self.log("  [agent] " + last_message["text"][:500])
