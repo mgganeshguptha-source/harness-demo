@@ -10,7 +10,9 @@ description: >
   The skill writes the plan to a timestamped file under
   .github/story-prompt-steps/, structured as goal + suggested prompt +
   review checkpoint per step, with a standing instructions block at the
-  top.
+  top. In NON-INTERACTIVE / CI mode it reads the newest context file from
+  .github/story-context-files/ on disk (not a chat attachment) and produces
+  the full plan in one pass without human checkpoints.
 ---
 
 # Build Prompt Steps Skill
@@ -61,7 +63,46 @@ Two failure modes this skill is designed to prevent:
 
 ## Workflow
 
-### 1. Verify inputs
+### 0. Mode detection — interactive vs non-interactive (CI)
+
+**Before anything else, determine the run mode.**
+
+- **Interactive mode (default):** a human is present and attaches files in chat.
+  Use the attachment-based workflow in steps 1+ below.
+- **Non-interactive / CI mode:** invoked by an automated harness with no chat and
+  no attachments. **CI mode requires an EXPLICIT positive signal** — at least one of:
+  a system/harness instruction stating the run is non-interactive or "CI mode", or
+  the invoking prompt explicitly saying "CI mode" / "read the context from disk".
+  **The mere absence of an attachment is NOT sufficient to enter CI mode** — a
+  developer in an IDE who simply forgot to attach a file must get the normal
+  interactive "please attach the context file" response, not a disk read.
+
+**When in non-interactive / CI mode, override the attachment rules as follows:**
+
+1. **Do NOT wait for a chat attachment and do NOT stop to ask for one.**
+2. **Read the context file from disk:** take the **newest** file in
+   `.github/story-context-files/`. That IS the authoritative context for this run
+   (the build-context skill wrote it there in CI mode). The normal rule
+   "never substitute a file found on disk" is REVERSED in CI — disk is the source.
+3. If `.github/story-context-files/` is empty or missing, do not invent a plan —
+   write nothing and report that no context file was found (the harness will halt).
+4. Generate the plan exactly as in interactive mode (Impacted Files block + steps),
+   but **do not pause for human checkpoints** — produce the full plan in one pass.
+5. **In CI, write the plan to the path the harness specifies in its prompt**
+   (the harness uses `.harness/prompt-steps.md` as the working/audit copy so it can
+   append the execution record after coding). Follow the harness's stated output
+   path; do not also write to `.github/story-prompt-steps/` unless asked. Do not ask
+   for approval; the harness gates approval separately.
+6. If the context file contains unresolved `[NEEDS CLARIFICATION]` markers, do not
+   plan around them — the harness should have halted earlier; if you still see them,
+   write nothing and report the unresolved markers.
+
+**Why:** in CI the file hand-off happens on disk, not via chat. The harness wrote
+the context to `.github/story-context-files/`; this skill reads it from there,
+plans in one pass, and the harness handles approval gating.
+
+---
+
 
 The developer attaches the context file to the chat when invoking this
 skill. The skill reads from chat attachments, not from disk. Throughout
