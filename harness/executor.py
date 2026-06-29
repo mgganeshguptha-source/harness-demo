@@ -34,6 +34,8 @@ class AgentResult:
     errored: bool = False
     error_msg: str = ""
     tokens: dict = field(default_factory=dict)  # token usage for this phase
+    skills_loaded: list = field(default_factory=list)   # skills the SDK loaded
+    tools_invoked: list = field(default_factory=list)    # tools/skills actually called
 
 
 class AgentRunner(Protocol):
@@ -101,6 +103,8 @@ class PhaseExecutor:
                 "est_credits": est.get("credits"),
                 "est_usd": est.get("usd"),
                 "included": est.get("included", False),
+                "skills_loaded": list(getattr(result, "skills_loaded", []) or []),
+                "tools_invoked": list(getattr(result, "tools_invoked", []) or []),
             })
             if est.get("included"):
                 cost_str = "included (0 credits)"
@@ -110,6 +114,26 @@ class PhaseExecutor:
                 cost_str = "rate unknown"
             self.log(f"  [tokens] {phase.id}: {phase_io} tokens "
                      f"(running total: {cumulative}) | est cost: {cost_str}")
+        else:
+            # No token usage reported, but the phase may still have loaded/invoked
+            # skills. Record attribution so the audit trail isn't blank.
+            _sk = list(getattr(result, "skills_loaded", []) or [])
+            _tl = list(getattr(result, "tools_invoked", []) or [])
+            if _sk or _tl:
+                from config import HarnessConfig as _HC0
+                _cfg0 = _HC0.load(self.harness_dir)
+                run.phase_token_log.append({
+                    "phase": phase.id,
+                    "model": _cfg0.model_for_phase(phase.id) if _cfg0 else "",
+                    "phase_tokens": 0,
+                    "cumulative_tokens": (run.total_tokens.get("input", 0) or 0)
+                                         + (run.total_tokens.get("output", 0) or 0),
+                    "est_credits": 0.0,
+                    "est_usd": 0.0,
+                    "included": True,
+                    "skills_loaded": _sk,
+                    "tools_invoked": _tl,
+                })
 
         if result.errored:
             self.log(f"  ! runner error: {result.error_msg}")
