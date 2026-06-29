@@ -1,25 +1,116 @@
 {
   "feature": "PC-2-haspet",
-  "status": "needs_input",
+  "status": "done",
   "completed_phases": [
-    "context"
+    "context",
+    "prompt_steps",
+    "coding",
+    "unit_testing",
+    "documentation",
+    "raise_pr"
   ],
   "total_tokens": {
-    "input": 101458,
-    "output": 2504,
-    "cache_read": 68736,
+    "input": 582641,
+    "output": 13838,
+    "cache_read": 480128,
     "cache_write": 0,
-    "reasoning": 1344
+    "reasoning": 7168
   },
   "phase_token_log": [
     {
       "phase": "context",
       "model": "gpt-5-mini",
-      "phase_tokens": 103962,
-      "cumulative_tokens": 103962,
+      "phase_tokens": 107940,
+      "cumulative_tokens": 107940,
       "est_credits": 0.0,
       "est_usd": 0.0,
-      "included": true
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "view",
+        "create"
+      ]
+    },
+    {
+      "phase": "prompt_steps",
+      "model": "gpt-5-mini",
+      "phase_tokens": 102302,
+      "cumulative_tokens": 210242,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "skill",
+        "create"
+      ]
+    },
+    {
+      "phase": "coding",
+      "model": "gpt-5-mini",
+      "phase_tokens": 84564,
+      "cumulative_tokens": 294806,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "view",
+        "edit"
+      ]
+    },
+    {
+      "phase": "unit_testing",
+      "model": "gpt-5-mini",
+      "phase_tokens": 223132,
+      "cumulative_tokens": 517938,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "view",
+        "grep",
+        "create"
+      ]
+    },
+    {
+      "phase": "documentation",
+      "model": "gpt-5-mini",
+      "phase_tokens": 39828,
+      "cumulative_tokens": 557766,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "create"
+      ]
+    },
+    {
+      "phase": "raise_pr",
+      "model": "gpt-5-mini",
+      "phase_tokens": 38713,
+      "cumulative_tokens": 596479,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "create"
+      ]
     }
   ]
 }
