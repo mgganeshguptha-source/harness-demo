@@ -5,18 +5,18 @@
     "context"
   ],
   "total_tokens": {
-    "input": 101458,
+    "input": 101420,
     "output": 2504,
-    "cache_read": 68736,
+    "cache_read": 80768,
     "cache_write": 0,
-    "reasoning": 1344
+    "reasoning": 1152
   },
   "phase_token_log": [
     {
       "phase": "context",
       "model": "gpt-5-mini",
-      "phase_tokens": 103962,
-      "cumulative_tokens": 103962,
+      "phase_tokens": 103924,
+      "cumulative_tokens": 103924,
       "est_credits": 0.0,
       "est_usd": 0.0,
       "included": true
