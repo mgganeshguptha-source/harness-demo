@@ -11,4 +11,9 @@
 4. Does not modify existing pets or owner state (read-only).
 5. Unit tests cover: a matching name, a non-matching name, case-insensitive match, and a null argument.
 
+## Clarifications (resolved)
+- Name comparison does NOT trim whitespace. " Fido " does not match "Fido".
+- Case-insensitivity uses `String.equalsIgnoreCase` only. No full Unicode/locale-aware case-folding.
+- Empty string "" returns false (no match), does not throw.
+
 
