@@ -58,10 +58,7 @@ Tests must assert the method does not alter the Owner or Pet objects (no added/r
 - Whitespace differences: callers may pass names with leading/trailing whitespace; decide whether the method should trim input before comparison.
 - Mutability: ensure the method does not trigger lazy-loading side-effects that modify entity state; prefer safe iteration over the pet collection.
 
-10. Clarifications Needed (CI-mode markers)
-
-[NEEDS CLARIFICATION]: Should the comparison trim leading/trailing whitespace from the provided `name` before comparing (e.g., treat " Fido " equal to "Fido")?
-[NEEDS CLARIFICATION]: Is Unicode-aware case folding required (full case-folding) beyond String.equalsIgnoreCase? If yes, specify expected behaviour or utility to use.
-
-
-Generated in CI mode from the provided story. Resolve the clarifications above with the product owner or architect before implementation if stricter requirements are needed.
+10. ## Clarifications (resolved)
+- Name comparison does NOT trim whitespace. " Fido " does not match "Fido".
+- Case-insensitivity uses `String.equalsIgnoreCase` only. No full Unicode/locale-aware case-folding.
+- Empty string "" returns false (no match), does not throw.
