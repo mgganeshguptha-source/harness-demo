@@ -1,25 +1,7 @@
 {
   "feature": "PC-2-haspet",
-  "status": "needs_input",
-  "completed_phases": [
-    "context"
-  ],
-  "total_tokens": {
-    "input": 101458,
-    "output": 2504,
-    "cache_read": 68736,
-    "cache_write": 0,
-    "reasoning": 1344
-  },
-  "phase_token_log": [
-    {
-      "phase": "context",
-      "model": "gpt-5-mini",
-      "phase_tokens": 103962,
-      "cumulative_tokens": 103962,
-      "est_credits": 0.0,
-      "est_usd": 0.0,
-      "included": true
-    }
-  ]
+  "status": "halted",
+  "completed_phases": [],
+  "total_tokens": {},
+  "phase_token_log": []
 }

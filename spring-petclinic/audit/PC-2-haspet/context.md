@@ -6,59 +6,55 @@ As a clinic staff member
 I want to check whether an owner already has a pet with a given name
 So that I can prevent duplicate pet names when registering a new pet for that owner.
 
-2. Layer / Scope
+2. Background
 
-Backend — domain model change on the Owner domain object (read-only behaviour: add a query method to check if an owner has a pet with the provided name). No controller, repository, API, or DB schema changes are required.
+The application models Owners and their Pets. Owners hold a collection of Pets (in-memory or persisted). Callers need a simple, read-only API to determine whether an Owner already has a Pet with a given name to enforce uniqueness at the UI/service layer before creating a new Pet.
 
 3. Current behaviour
 
-There is currently no dedicated Owner.hasPet(String) convenience method on the Owner domain object. Call-sites perform ad-hoc checks by iterating pets or rely on higher-level code to avoid duplicates.
+_Not found in codebase — confirm with team_: confirm whether a utility or existing Owner-level method already performs this check, or whether callers currently iterate the pet collection manually.
 
 4. Expected behaviour
 
-- Add a public method boolean hasPet(String name) to the Owner domain model.
-- The method returns true if any Pet owned by the Owner has a name that matches the provided name in a case-insensitive comparison.
-- The method returns false if no pet matches or if name is null.
-- The method is read-only and must not mutate Owner or Pet state.
+- Add a public method boolean hasPet(String name) accessible on the Owner model/object.
+- Method returns true if the owner has any pet whose name equals the provided name using case-insensitive comparison via String.equalsIgnoreCase.
+- Method returns false when no pet matches, when name is null, or when name is the empty string "".
+- Method is read-only and does not modify Owner or Pet state.
+- Name comparison does NOT trim whitespace; exact characters are compared except for case as specified.
 
-5. Acceptance Criteria (from story)
+5. Acceptance criteria (testable)
 
-1. Add a public method `boolean hasPet(String name)` to the `Owner` class.
-2. Returns `true` if the owner has a pet whose name matches `name` (case-insensitive).
-3. Returns `false` if no pet matches, or if `name` is null.
-4. Does not modify existing pets or owner state (read-only).
-5. Unit tests cover: a matching name, a non-matching name, case-insensitive match, and a null argument.
+1. The Owner model exposes a public method: boolean hasPet(String name).
+2. hasPet("Fido") returns true when Owner has a pet named "Fido".
+3. hasPet("fido") returns true when Owner has a pet named "Fido" (case-insensitive match using equalsIgnoreCase).
+4. hasPet("Rex") returns false when Owner has pets but none named "Rex".
+5. hasPet(null) returns false and does not throw.
+6. hasPet("") returns false and does not throw.
+7. Method does not mutate Owner or Pet state (read-only). Unit tests must assert immutability where applicable.
+8. Unit tests cover: matching name, non-matching name, case-insensitive match, null argument, and empty-string argument.
 
-6. Tests / Verification
+6. Constraints
 
-Unit tests (JUnit 5) must be added to the Owner unit test suite covering these cases:
-- matching name: owner with a pet named "Fido" -> hasPet("Fido") == true
-- non-matching name: owner with pets but none named "Rex" -> hasPet("Rex") == false
-- case-insensitive match: owner with pet "Buddy" -> hasPet("buddy") == true
-- null argument: hasPet(null) == false
+- Language / stack: Java (Spring Boot codebase conventions).
+- Tests: JUnit 5 (existing project test conventions). Use small, focused unit tests for Owner behavior.
+- Implementation: keep method small and deterministic; do not introduce database writes or side-effects.
+- String comparison per clarification: use String.equalsIgnoreCase only (no locale-aware folding). Do not trim input; whitespace is significant.
 
-Tests must assert the method does not alter the Owner or Pet objects (no added/removed pets, names unchanged).
+7. Out of scope
 
-7. Constraints
+- Changing persistence schema or database constraints to enforce pet-name uniqueness — this story only adds an in-memory/POJO-level check.
+- UI changes to pet registration forms or server-side validation beyond adding the read-only check.
+- Introducing locale-aware case folding or Unicode normalization for name comparisons.
 
-- Implementation must be simple, efficient, and avoid side effects. Method should not modify collections or entity state.
-- Use safe case-insensitive comparison — at minimum String.equalsIgnoreCase or an agreed project utility. If Unicode-aware case folding is required, flag in Clarifications.
-- Unit tests should use JUnit 5 and existing test conventions in the repo (no new testing frameworks).
-- Keep the change local to the domain model; do not add new dependencies.
+8. Clarifications / Questions (CI-mode markers)
 
-8. Out of scope
+[NEEDS CLARIFICATION]: Confirm whether the codebase already contains an equivalent utility or Owner-level method that performs this check (if present, update tests/spec to cover the existing API rather than adding a duplicate method).
 
-- Any API/controller changes to enforce unique pet names are out of scope.
-- Database schema or repository-level uniqueness constraints are out of scope.
-- Client-side (UI) validations and messages are out of scope.
+Notes
 
-9. Risks and notes
+- Resolved clarifications (from the story):
+  - Do NOT trim whitespace. Example: " Fido " does not match "Fido".
+  - Case-insensitivity must use String.equalsIgnoreCase only.
+  - Empty string "" returns false (no match) and does not throw.
 
-- Locale and Unicode: simple equalsIgnoreCase handles ASCII and some Unicode, but may not be sufficient for all locales. If pet names may contain accented characters or locale-specific casing rules, a more robust Unicode case-folding approach might be required.
-- Whitespace differences: callers may pass names with leading/trailing whitespace; decide whether the method should trim input before comparison.
-- Mutability: ensure the method does not trigger lazy-loading side-effects that modify entity state; prefer safe iteration over the pet collection.
-
-10. ## Clarifications (resolved)
-- Name comparison does NOT trim whitespace. " Fido " does not match "Fido".
-- Case-insensitivity uses `String.equalsIgnoreCase` only. No full Unicode/locale-aware case-folding.
-- Empty string "" returns false (no match), does not throw.
+Context written by CI-mode build-context for the story "Owner.hasPet(name)". Resolve the [NEEDS CLARIFICATION] item with the team before implementing if the presence of an existing helper is unknown.
