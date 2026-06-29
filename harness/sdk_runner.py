@@ -71,6 +71,80 @@ def _glob_intersects_scope(apply_to: str, scope_globs: list) -> bool:
     return False
 
 
+def _extract_names(data, *attr_candidates) -> list[str]:
+    """Defensively pull human-readable name(s) out of an SDK event payload.
+
+    The SDK's event schema (github-copilot-sdk 1.0.x) isn't documented for the
+    skills_loaded / tool.execution_* payloads, and the shape differs by event.
+    Rather than hard-code one attribute, we try several shapes in order:
+      1. a list attribute (e.g. data.skills) of objects/dicts each having a name
+      2. a scalar name attribute (e.g. data.name / data.tool_name) on data itself
+      3. a pydantic .model_dump() fallback, scanning common keys
+    Returns a de-duplicated, order-preserving list of strings (possibly empty).
+    """
+    out: list[str] = []
+
+    def _name_of(obj) -> str | None:
+        for k in ("name", "id", "tool_name", "skill_name", "title"):
+            v = getattr(obj, k, None)
+            if v is None and isinstance(obj, dict):
+                v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        if isinstance(obj, str) and obj.strip():
+            return obj.strip()
+        return None
+
+    # 1) list-shaped attributes (skills, tools, ...)
+    for attr in attr_candidates:
+        seq = getattr(data, attr, None)
+        if seq is None and isinstance(data, dict):
+            seq = data.get(attr)
+        if isinstance(seq, (list, tuple)):
+            for item in seq:
+                n = _name_of(item)
+                if n:
+                    out.append(n)
+
+    # 2) scalar name directly on data (tool.execution_start is usually one tool)
+    if not out:
+        n = _name_of(data)
+        if n:
+            out.append(n)
+
+    # 3) pydantic dump fallback — last resort, scan likely keys
+    if not out:
+        dump = None
+        try:
+            dump = data.model_dump()  # pydantic v2
+        except Exception:
+            try:
+                dump = dict(vars(data))
+            except Exception:
+                dump = None
+        if isinstance(dump, dict):
+            for attr in attr_candidates:
+                seq = dump.get(attr)
+                if isinstance(seq, (list, tuple)):
+                    for item in seq:
+                        n = _name_of(item)
+                        if n:
+                            out.append(n)
+            for k in ("name", "tool_name", "skill_name"):
+                v = dump.get(k)
+                if isinstance(v, str) and v.strip():
+                    out.append(v.strip())
+
+    # de-dupe, preserve order
+    seen = set()
+    deduped = []
+    for n in out:
+        if n not in seen:
+            seen.add(n)
+            deduped.append(n)
+    return deduped
+
+
 def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
     """Load the capability layer for THIS phase.
 
@@ -178,6 +252,15 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
             f"including an 'Impacted Files' section, to this EXACT file (its parent "
             f".harness ALREADY EXISTS, do not mkdir, shell is disallowed): {plan_file}\n"
             f"  STORY: {story}\n"
+            f"THIS IS A PLANNING PHASE ONLY. You MUST NOT create, edit, or write any "
+            f".java file or any source or test file. Do NOT implement the change in this "
+            f"phase — implementation happens in a later phase. The ONLY file you are "
+            f"permitted to write is {plan_file}. Any attempt to write under src/main or "
+            f"src/test will be denied by the harness and will FAIL the run. Describe the "
+            f"intended code changes as TEXT inside the plan file instead: list the target "
+            f"file paths, method signatures, and (optionally) before/after snippets as "
+            f"fenced code blocks within {plan_file}. Do not call any file-write tool for "
+            f"anything other than {plan_file}.\n"
             f"Write ONLY {plan_file}."
         ),
         "coding": (
@@ -295,6 +378,10 @@ class SdkAgentRunner:
                 usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "reasoning": 0}
                 seen_events = {}
                 errors = []
+                # capability attribution: which skills the SDK loaded (definitive)
+                # and which tools it invoked (inferred from tool.execution_start).
+                skills_loaded: list[str] = []
+                tools_invoked: list[str] = []
 
                 def on_event(event):
                     t = event.type.value
@@ -321,6 +408,25 @@ class SdkAgentRunner:
                             errors.append(f"{t}: {getattr(event.data, 'message', str(event.data))[:300]}")
                         except Exception:
                             errors.append(t)
+                    elif t == "session.skills_loaded":
+                        # DEFINITIVE: the skills the SDK actually loaded this session.
+                        try:
+                            for n in _extract_names(event.data, "skills", "loaded", "items"):
+                                if n not in skills_loaded:
+                                    skills_loaded.append(n)
+                        except Exception:
+                            pass
+                    elif t in ("tool.execution_start", "tool.execution_complete"):
+                        # INFERRED USE: a skill/tool was invoked. Skills surface as
+                        # tool calls, so this is the closest signal to "was used".
+                        # Record on _start (the canonical trigger); _complete is a
+                        # harmless fallback if _start was missed.
+                        try:
+                            for n in _extract_names(event.data, "tools", "tool", "items"):
+                                if n not in tools_invoked:
+                                    tools_invoked.append(n)
+                        except Exception:
+                            pass
                     # terminal events: idle OR any completion-style event ends the turn
                     if t in ("session.idle", "session.completed", "turn.completed", "session.error"):
                         done.set()
@@ -339,6 +445,22 @@ class SdkAgentRunner:
                     for e in errors:
                         self.log(f"  [diag] ERROR EVENT: {e}")
 
+                # CAPABILITY ATTRIBUTION — what loaded vs what was invoked.
+                # 'configured' is what config.phase_skills SAID should load this
+                # phase; 'loaded' is what the SDK reported loading; 'invoked' is
+                # what was actually called. loaded != invoked (loaded only means
+                # available to the model).
+                try:
+                    from config import HarnessConfig as _HC2
+                    _cfg2 = _HC2.load(repo_root / ".harness")
+                    _configured = list((_cfg2.phase_skills or {}).get(phase.id, [])) if _cfg2 else []
+                except Exception:
+                    _configured = []
+                self.log(f"  [skills] phase '{phase.id}': "
+                         f"configured={_configured or '(none)'} | "
+                         f"loaded={skills_loaded or '(none reported)'} | "
+                         f"invoked={tools_invoked or '(none reported)'}")
+
                 if last_message["text"]:
                     self.log("  [agent] " + last_message["text"][:500])
 
@@ -350,6 +472,10 @@ class SdkAgentRunner:
                              f"cache_r={usage['cache_read']} reasoning={usage['reasoning']}")
                 # stash on the result so the orchestrator can aggregate
                 self._last_usage = usage
+                self._last_skills = skills_loaded
+                self._last_tools = tools_invoked
 
         return AgentResult(attempted_writes=attempted_writes, iterations_used=1,
-                           tokens=getattr(self, "_last_usage", {}))
+                           tokens=getattr(self, "_last_usage", {}),
+                           skills_loaded=getattr(self, "_last_skills", []),
+                           tools_invoked=getattr(self, "_last_tools", []))
