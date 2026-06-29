@@ -1,22 +1,31 @@
 {
   "feature": "PC-2-haspet",
-  "status": "needs_input",
+  "status": "halted",
   "completed_phases": [
     "context"
   ],
   "total_tokens": {
-    "input": 101458,
-    "output": 2504,
-    "cache_read": 68736,
+    "input": 616003,
+    "output": 10253,
+    "cache_read": 461824,
     "cache_write": 0,
-    "reasoning": 1344
+    "reasoning": 4992
   },
   "phase_token_log": [
     {
       "phase": "context",
       "model": "gpt-5-mini",
-      "phase_tokens": 103962,
-      "cumulative_tokens": 103962,
+      "phase_tokens": 72008,
+      "cumulative_tokens": 72008,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true
+    },
+    {
+      "phase": "prompt_steps",
+      "model": "gpt-5-mini",
+      "phase_tokens": 554248,
+      "cumulative_tokens": 626256,
       "est_credits": 0.0,
       "est_usd": 0.0,
       "included": true
