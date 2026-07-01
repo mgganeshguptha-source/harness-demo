@@ -119,13 +119,91 @@ class StateMachine:
                     vr = self._validator(self.repo_root, self.harness_dir, self.log)
                 else:
                     from validation import run_validation
-                    vr = run_validation(self.repo_root, self.harness_dir, log=self.log)
+                    vr = run_validation(self.repo_root, self.harness_dir, log=self.log,
+                                        changed_files=run.changed_main_files)
                 self.log(f"  [harness] validation: {vr.summary} (exit {vr.exit_code})")
                 if not vr.passed:
                     from config import HarnessConfig
                     cfg = HarnessConfig.load(self.harness_dir)
-                    run.validation_attempts += 1
 
+                    kind = getattr(vr, "failure_kind", None) or "test"
+
+                    # ============================================================
+                    # COVERAGE MISS: tests pass but per-change coverage < target.
+                    # Loop back to unit_testing to ADD TESTS (never touch source),
+                    # on a SEPARATE retry budget. On exhaustion, halt with a
+                    # detailed, human-actionable message.
+                    # ============================================================
+                    if kind == "coverage":
+                        run.coverage_attempts += 1
+                        cov_loop = cfg.coverage_loopback_phase
+                        pct = getattr(vr, "coverage_pct", None)
+                        target = getattr(vr, "coverage_target", None) or cfg.min_coverage
+                        measured = getattr(vr, "coverage_classes", []) or []
+                        pct_str = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "unmeasurable"
+
+                        if cov_loop and run.coverage_attempts <= cfg.max_coverage_retries:
+                            self.log(
+                                f"  ! COVERAGE_BELOW_THRESHOLD — looping back to "
+                                f"'{cov_loop}' to add tests "
+                                f"(attempt {run.coverage_attempts}/{cfg.max_coverage_retries}); "
+                                f"changed-class coverage {pct_str} < {target:.1f}%")
+                            run.last_feedback = (
+                                "The tests PASS, but per-change code coverage is below the "
+                                f"required {target:.1f}% for the changed class(es). "
+                                f"Current changed-class coverage: {pct_str}. "
+                                "ADD or STRENGTHEN unit tests to cover the untested branches "
+                                "and lines of the changed production code. "
+                                "You MUST NOT modify any production/source code — only add "
+                                "tests under src/test. "
+                                + (f"Classes measured: {', '.join(measured)}. " if measured else "")
+                                + "Coverage detail:\n" + vr.output_tail
+                            )
+                            # reset ONLY the unit_testing iteration budget so it can act
+                            run.iterations[cov_loop] = 0
+                            run.approvals[cov_loop] = "rejected"
+                            run.current_phase = cov_loop
+                            run.status = "running"
+                            run.save(self.harness_dir)
+                            return run
+
+                        # coverage retries exhausted -> HALT with recommendation
+                        self.log(
+                            f"  ! COVERAGE_BELOW_THRESHOLD — retries exhausted "
+                            f"({run.coverage_attempts - 1}/{cfg.max_coverage_retries}); halting")
+                        halt_msg = (
+                            "\n  ================ COVERAGE GATE: HALTED ================\n"
+                            f"  What was attempted : the harness looped back to "
+                            f"'{cfg.coverage_loopback_phase}' {run.coverage_attempts - 1} "
+                            f"time(s) to add unit tests, without modifying production code.\n"
+                            f"  Current status     : changed-class {cfg.coverage_metric} "
+                            f"coverage = {pct_str}, required = {target:.1f}% "
+                            f"(NOT met).\n"
+                            f"  Changed class(es)  : "
+                            f"{', '.join(run.changed_main_files) if run.changed_main_files else '(none recorded)'}\n"
+                            f"  Measured in report : "
+                            f"{', '.join(measured) if measured else '(none matched JaCoCo rows)'}\n"
+                            "  Recommendation     : a human should review whether the "
+                            "remaining uncovered lines are practically testable (e.g. "
+                            "defensive branches, generated code, or framework glue). "
+                            "Either add targeted tests by hand, lower min_coverage for this "
+                            "story with justification, or exclude non-meaningful lines from "
+                            "JaCoCo. The tests that DO exist are green; only the coverage "
+                            "threshold blocks the PR.\n"
+                            "  ======================================================\n"
+                        )
+                        self.log(halt_msg)
+                        self.log("  --- coverage/report tail ---\n" + vr.output_tail)
+                        run.last_feedback = halt_msg
+                        run.status = "halted"
+                        run.save(self.harness_dir)
+                        return run
+
+                    # ============================================================
+                    # TEST FAILURE (red): loop back to coding to FIX SOURCE.
+                    # Existing behaviour / existing retry budget.
+                    # ============================================================
+                    run.validation_attempts += 1
                     loopback = cfg.validation_loopback_phase
                     if loopback and run.validation_attempts <= cfg.max_validation_retries:
                         # CONDITIONAL TRANSITION (known edge, not dynamic):

@@ -61,6 +61,18 @@ class HarnessConfig:
     # If > 0, the harness checks line coverage after tests and fails validation
     # when coverage is below this percent. 0 => coverage gate disabled.
     min_coverage: float = 0.0
+    # Coverage scope:
+    #   "changed" => gate ONLY on the classes the coding phase wrote this run
+    #                (per-change coverage — "did MY change get tested").
+    #   "global"  => gate on the whole module (legacy behaviour).
+    coverage_scope: str = "changed"
+    # On a coverage MISS (tests pass but coverage below threshold), loop back to
+    # THIS phase to add more tests. Distinct from validation_loopback_phase, which
+    # handles RED tests. Coverage is a test problem => loop to unit_testing.
+    coverage_loopback_phase: str = "unit_testing"
+    # Max coverage-driven retries before halting for a human (separate budget from
+    # max_validation_retries, which governs red-test loopbacks).
+    max_coverage_retries: int = 2
     # Goal that produces the JaCoCo CSV. report binds to prepare-package, so we
     # explicitly invoke jacoco:report after tests. Scoped to the filter if set.
     coverage_command: str = "mvnw.cmd jacoco:report"
@@ -127,6 +139,9 @@ class HarnessConfig:
             validation_loopback_phase=data.get("validation_loopback_phase", cls.validation_loopback_phase),
             max_validation_retries=int(data.get("max_validation_retries", cls.max_validation_retries)),
             min_coverage=float(data.get("min_coverage", cls.min_coverage)),
+            coverage_scope=data.get("coverage_scope", cls.coverage_scope),
+            coverage_loopback_phase=data.get("coverage_loopback_phase", cls.coverage_loopback_phase),
+            max_coverage_retries=int(data.get("max_coverage_retries", cls.max_coverage_retries)),
             coverage_command=data.get("coverage_command", cls.coverage_command),
             coverage_csv=data.get("coverage_csv", cls.coverage_csv),
             coverage_metric=data.get("coverage_metric", cls.coverage_metric),

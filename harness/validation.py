@@ -12,7 +12,7 @@ than a hope: the green run is verified by code, as a precondition to proceeding.
 """
 from __future__ import annotations
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import HarnessConfig
@@ -24,14 +24,101 @@ class ValidationResult:
     exit_code: int
     summary: str
     output_tail: str
+    # Why validation failed, so the state machine can route correctly:
+    #   None       -> passed
+    #   "test"     -> tests are RED  => loop back to coding
+    #   "coverage" -> tests pass but per-change coverage below threshold
+    #                 => loop back to unit_testing
+    failure_kind: str | None = None
+    # Coverage detail (populated when the coverage gate ran), for messaging.
+    coverage_pct: float | None = None
+    coverage_target: float | None = None
+    coverage_classes: list = field(default_factory=list)   # classes measured
+    coverage_covered: int = 0
+    coverage_missed: int = 0
+
+
+def _java_file_to_class_key(rel_path: str) -> tuple[str, str] | None:
+    """Map a repo-relative .java source path to (package, ClassName) as JaCoCo
+    reports them in its CSV.
+
+    'src/main/java/org/springframework/samples/petclinic/owner/Owner.java'
+      -> ('org.springframework.samples.petclinic.owner', 'Owner')
+    Returns None for non-source or unparseable paths.
+    """
+    p = rel_path.replace("\\", "/").strip()
+    if not p.endswith(".java"):
+        return None
+    # locate the source root marker
+    for marker in ("src/main/java/", "src/test/java/", "src/main/kotlin/"):
+        i = p.find(marker)
+        if i != -1:
+            pkgpath = p[i + len(marker):]
+            break
+    else:
+        # no recognizable source root; fall back to basename only
+        pkgpath = p.rsplit("/", 1)[-1]
+    cls = pkgpath.rsplit("/", 1)[-1][:-len(".java")]
+    pkg_dir = pkgpath[: -len(pkgpath.rsplit("/", 1)[-1])].rstrip("/")
+    package = pkg_dir.replace("/", ".")
+    return (package, cls)
+
+
+def _parse_changed_coverage(csv_path: Path, metric: str,
+                            changed_files: list) -> tuple[float | None, int, int, list]:
+    """Per-change coverage: compute `metric` coverage over ONLY the JaCoCo rows
+    whose (PACKAGE, CLASS) match the changed source files.
+
+    Returns (percent | None, covered, missed, measured_class_labels).
+    percent is None if the report is missing/unreadable OR none of the changed
+    classes appear in the report (e.g. brand-new class with no test touching it
+    still appears with 0 covered; truly absent => None so caller can decide).
+    """
+    if not csv_path.exists():
+        return (None, 0, 0, [])
+
+    # Build the set of (package, class) we care about. JaCoCo emits nested/inner
+    # classes as 'Owner.Inner' or 'Owner$1'; match the top-level class as a prefix.
+    wanted = set()
+    for f in changed_files or []:
+        key = _java_file_to_class_key(f)
+        if key:
+            wanted.add(key)
+    if not wanted:
+        return (None, 0, 0, [])
+
+    try:
+        import csv as _csv
+        covered = missed = 0
+        measured = []
+        matched_any = False
+        with csv_path.open(encoding="utf-8") as fh:
+            for row in _csv.DictReader(fh):
+                pkg = row.get("PACKAGE", "")
+                cls = row.get("CLASS", "")
+                # top-level class name (strip inner-class suffixes)
+                top = cls.split("$", 1)[0].split(".", 1)[0]
+                if (pkg, top) in wanted:
+                    matched_any = True
+                    m = int(row[f"{metric}_MISSED"])
+                    c = int(row[f"{metric}_COVERED"])
+                    missed += m
+                    covered += c
+                    measured.append(f"{pkg}.{cls}")
+        if not matched_any:
+            return (None, 0, 0, [])
+        total = covered + missed
+        if total == 0:
+            # class(es) matched but have zero of this metric (e.g. an interface).
+            # Treat as 100% — nothing to cover — rather than a failure.
+            return (100.0, covered, missed, measured)
+        return (100.0 * covered / total, covered, missed, measured)
+    except Exception:
+        return (None, 0, 0, [])
 
 
 def _parse_coverage(csv_path: Path, metric: str) -> float | None:
-    """Compute percent coverage for the given metric from a JaCoCo CSV.
-
-    Returns None if the file is missing/unparseable. Percent = covered/(covered+missed)
-    summed across all rows.
-    """
+    """Global coverage across ALL rows (legacy 'global' scope)."""
     if not csv_path.exists():
         return None
     try:
@@ -49,7 +136,8 @@ def _parse_coverage(csv_path: Path, metric: str) -> float | None:
         return None
 
 
-def run_validation(repo_root: Path, harness_dir: Path, log=print) -> ValidationResult:
+def run_validation(repo_root: Path, harness_dir: Path, log=print,
+                   changed_files: list | None = None) -> ValidationResult:
     cfg = HarnessConfig.load(harness_dir)
 
     # ---- DETERMINISTIC PRE-STEP: normalize formatting ----
@@ -95,6 +183,7 @@ def run_validation(repo_root: Path, harness_dir: Path, log=print) -> ValidationR
     tail = "\n".join(out.splitlines()[-25:])  # last lines hold the BUILD result
 
     passed = proc.returncode == 0
+    failure_kind = None if passed else "test"
     # Maven prints BUILD SUCCESS / BUILD FAILURE; use exit code as source of truth,
     # the text scan is only for a friendlier summary line.
     if "BUILD SUCCESS" in out:
@@ -106,6 +195,9 @@ def run_validation(repo_root: Path, harness_dir: Path, log=print) -> ValidationR
 
     # ---- COVERAGE GATE (only if tests passed and a threshold is set) ----
     coverage_note = ""
+    cov_pct = None
+    cov_covered = cov_missed = 0
+    cov_measured: list = []
     if passed and cfg.min_coverage > 0:
         log(f"  [harness] coverage: {cfg.coverage_command}")
         try:
@@ -114,21 +206,47 @@ def run_validation(repo_root: Path, harness_dir: Path, log=print) -> ValidationR
         except Exception as e:
             log(f"  [harness] coverage command error: {e} (continuing to parse if report exists)")
 
-        cov = _parse_coverage(repo_root / cfg.coverage_csv, cfg.coverage_metric)
-        if cov is None:
-            # Can't measure -> treat as a gate failure (don't silently pass).
+        csv_path = repo_root / cfg.coverage_csv
+        if cfg.coverage_scope == "changed":
+            # PER-CHANGE coverage: only the classes the coding phase wrote this run.
+            log(f"  [harness] coverage scope: changed classes = "
+                f"{changed_files if changed_files else '(none recorded)'}")
+            cov_pct, cov_covered, cov_missed, cov_measured = _parse_changed_coverage(
+                csv_path, cfg.coverage_metric, changed_files or [])
+        else:
+            cov_pct = _parse_coverage(csv_path, cfg.coverage_metric)
+
+        if cov_pct is None:
+            # Can't measure -> treat as a gate failure (don't silently pass). For
+            # "changed" scope this also fires when none of the changed classes
+            # appear in the report (misconfigured JaCoCo, or no changed source).
             passed = False
+            failure_kind = "coverage"
             summary = "COVERAGE UNREADABLE"
-            coverage_note = f"Could not read {cfg.coverage_metric} coverage from {cfg.coverage_csv}"
+            if cfg.coverage_scope == "changed":
+                coverage_note = (
+                    f"Could not measure {cfg.coverage_metric} coverage for the changed "
+                    f"class(es) {changed_files or '[]'} from {cfg.coverage_csv}. "
+                    f"Check that JaCoCo (jacoco-maven-plugin) is configured and that the "
+                    f"changed files are main source.")
+            else:
+                coverage_note = f"Could not read {cfg.coverage_metric} coverage from {cfg.coverage_csv}"
             log("  ! " + coverage_note)
-        elif cov < cfg.min_coverage:
+        elif cov_pct < cfg.min_coverage:
             passed = False
-            summary = f"COVERAGE {cov:.1f}% < {cfg.min_coverage:.1f}%"
-            coverage_note = (f"{cfg.coverage_metric} coverage {cov:.1f}% is below the "
-                             f"required {cfg.min_coverage:.1f}%")
+            failure_kind = "coverage"
+            scope_lbl = "changed-class" if cfg.coverage_scope == "changed" else "global"
+            summary = f"COVERAGE {cov_pct:.1f}% < {cfg.min_coverage:.1f}% ({scope_lbl})"
+            coverage_note = (
+                f"{scope_lbl} {cfg.coverage_metric} coverage {cov_pct:.1f}% is below the "
+                f"required {cfg.min_coverage:.1f}% "
+                f"(covered={cov_covered}, missed={cov_missed}; "
+                f"measured: {', '.join(cov_measured) if cov_measured else 'n/a'})")
             log("  ! " + coverage_note)
         else:
-            coverage_note = f"{cfg.coverage_metric} coverage {cov:.1f}% (>= {cfg.min_coverage:.1f}%)"
+            scope_lbl = "changed-class" if cfg.coverage_scope == "changed" else "global"
+            coverage_note = (f"{scope_lbl} {cfg.coverage_metric} coverage {cov_pct:.1f}% "
+                             f"(>= {cfg.min_coverage:.1f}%)")
             log(f"  [harness] {coverage_note}")
 
     # Write a validation report into the workspace (auditable artifact).
@@ -147,4 +265,12 @@ def run_validation(repo_root: Path, harness_dir: Path, log=print) -> ValidationR
         pass
 
     final_tail = tail if not coverage_note else (tail + "\n\nCOVERAGE: " + coverage_note)
-    return ValidationResult(passed, proc.returncode, summary, final_tail)
+    return ValidationResult(
+        passed, proc.returncode, summary, final_tail,
+        failure_kind=failure_kind,
+        coverage_pct=cov_pct,
+        coverage_target=(cfg.min_coverage if cfg.min_coverage > 0 else None),
+        coverage_classes=cov_measured,
+        coverage_covered=cov_covered,
+        coverage_missed=cov_missed,
+    )
