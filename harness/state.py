@@ -27,6 +27,12 @@ class RunState:
     iterations: dict = field(default_factory=dict)
     # how many times validation has failed and looped back (retry cap bookkeeping)
     validation_attempts: int = 0
+    # how many times the per-change coverage gate has failed and looped back to
+    # unit_testing (separate cap from test-failure retries).
+    coverage_attempts: int = 0
+    # repo-relative src/main files the coding phase actually wrote this run. Used
+    # by the per-change coverage gate to scope coverage to ONLY the changed classes.
+    changed_main_files: list = field(default_factory=list)
     # cumulative token usage across all phases (for credit estimation)
     total_tokens: dict = field(default_factory=dict)
     # per-phase token usage + the model used, in execution order, for the

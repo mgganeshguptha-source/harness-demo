@@ -152,6 +152,21 @@ class PhaseExecutor:
                 self.log(f"  ! required artifact missing: {phase.required_artifact}")
                 return ExitCode.ARTIFACT_MISSING
 
+        # --- record changed MAIN source files (for the per-change coverage gate) ---
+        # The coding phase writes production code under src/main/**. Capture those
+        # repo-relative paths into run state so the validation gate can scope
+        # coverage to ONLY the classes this run changed. Accumulate across loopbacks
+        # (a coding retry may touch the same or additional files) without dupes.
+        for w in result.attempted_writes:
+            from execution_record import _rel_to_repo as _rel
+            rel = _rel(w, self.repo_root)
+            if "/src/main/" in ("/" + rel.replace("\\", "/")) and rel.endswith(".java"):
+                if rel not in run.changed_main_files:
+                    run.changed_main_files.append(rel)
+        if run.changed_main_files:
+            self.log(f"  [harness] changed main source (coverage scope): "
+                     + ", ".join(run.changed_main_files))
+
         # --- EXECUTION RECORD: append actual-vs-approved audit to the plan ---
         if getattr(phase, "record_execution", False):
             try:
