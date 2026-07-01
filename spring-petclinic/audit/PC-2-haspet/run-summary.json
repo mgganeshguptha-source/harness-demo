@@ -1,25 +1,118 @@
 {
   "feature": "PC-2-haspet",
-  "status": "needs_input",
+  "status": "done",
   "completed_phases": [
-    "context"
+    "context",
+    "prompt_steps",
+    "coding",
+    "unit_testing",
+    "documentation",
+    "raise_pr"
   ],
   "total_tokens": {
-    "input": 101458,
-    "output": 2504,
-    "cache_read": 68736,
+    "input": 703572,
+    "output": 15870,
+    "cache_read": 560384,
     "cache_write": 0,
-    "reasoning": 1344
+    "reasoning": 7936
   },
   "phase_token_log": [
     {
       "phase": "context",
       "model": "gpt-5-mini",
-      "phase_tokens": 103962,
-      "cumulative_tokens": 103962,
+      "phase_tokens": 104831,
+      "cumulative_tokens": 104831,
       "est_credits": 0.0,
       "est_usd": 0.0,
-      "included": true
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "skill",
+        "create"
+      ]
+    },
+    {
+      "phase": "prompt_steps",
+      "model": "gpt-5-mini",
+      "phase_tokens": 70859,
+      "cumulative_tokens": 175690,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "create"
+      ]
+    },
+    {
+      "phase": "coding",
+      "model": "gpt-5-mini",
+      "phase_tokens": 141778,
+      "cumulative_tokens": 317468,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "grep",
+        "view",
+        "edit",
+        "bash"
+      ]
+    },
+    {
+      "phase": "unit_testing",
+      "model": "gpt-5-mini",
+      "phase_tokens": 321664,
+      "cumulative_tokens": 639132,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "view",
+        "grep",
+        "create",
+        "bash"
+      ]
+    },
+    {
+      "phase": "documentation",
+      "model": "gpt-5-mini",
+      "phase_tokens": 40975,
+      "cumulative_tokens": 680107,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "create"
+      ]
+    },
+    {
+      "phase": "raise_pr",
+      "model": "gpt-5-mini",
+      "phase_tokens": 39335,
+      "cumulative_tokens": 719442,
+      "est_credits": 0.0,
+      "est_usd": 0.0,
+      "included": true,
+      "skills_loaded": [
+        "customize-cloud-agent"
+      ],
+      "tools_invoked": [
+        "create"
+      ]
     }
   ]
 }
