@@ -267,6 +267,25 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
             f"Implement the change described in {plan_file} for:\n  STORY: {story}\n"
             f"Edit ONLY application source under {src_main}/. Do NOT create or edit any test files."
         ),
+        "code_review": (
+            f"You are an INDEPENDENT code reviewer. You did NOT write this code. "
+            f"Review the implementation of the change for:\n  STORY: {story}\n"
+            f"Read (read-only) the plan at {plan_file} and the application source under "
+            f"{src_main}/. Judge correctness against the story and plan, edge-case handling "
+            f"(null/empty/boundary), security, error handling, and adherence to project "
+            f"standards. Use the security-review skill.\n"
+            f"You MUST NOT edit, create, or fix any source or test file — reviewing is not "
+            f"fixing. The ONLY file you may write is the verdict at this EXACT path "
+            f"(parent .harness ALREADY EXISTS, shell disallowed): {rr}/.harness/review.md\n"
+            f"Write {rr}/.harness/review.md in EXACTLY this structure:\n"
+            f"  - First line MUST be:  VERDICT: PASS   (if the code is correct and ready)\n"
+            f"    or:                  VERDICT: CHANGES_REQUESTED   (if any issue exists)\n"
+            f"  - If CHANGES_REQUESTED, list each problem on its own line as:\n"
+            f"      [ISSUE]: <specific, actionable description of what is wrong and where>\n"
+            f"  - You may add free-form notes after the issues.\n"
+            f"Be strict: if there is any correctness, safety, or standards problem, the "
+            f"verdict is CHANGES_REQUESTED. Write ONLY {rr}/.harness/review.md."
+        ),
         "unit_testing": (
             f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
             f"Do NOT modify application code under {src_main}/. Tests only."
@@ -350,6 +369,10 @@ class SdkAgentRunner:
         _cfg = _HC.load(repo_root / ".harness")
         phase_model = (_cfg.model_for_phase(phase.id) if _cfg else None) or self.model
         self.log(f"  [model] phase '{phase.id}' -> {phase_model}")
+        if phase.id == "code_review" and _cfg and _cfg.review_model_conflict():
+            self.log("  [warn] reviewer model == coding model — review independence is "
+                     "reduced; set review_model to a different model for a true "
+                     "independent review.")
 
         # working_directory scopes the agent to the petclinic repo so writes match
         # our globs. use_logged_in_user=True rides on your authed Copilot CLI (Pro).
