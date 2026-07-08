@@ -26,6 +26,7 @@ ALL_PHASES = [
 EXPECTED_ARTIFACT = {
     "context.md": "context",
     "prompt-steps.md": "prompt_steps",
+    "review.md": "code_review",
     "validation-report.txt": "unit_testing",
     "pr-body.md": "raise_pr",
 }

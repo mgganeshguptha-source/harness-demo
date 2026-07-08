@@ -147,7 +147,7 @@ def cmd_collect_audit(args):
             dst = audit_dir / "context.md"
             shutil.copy2(ctxs[0], dst); copied.append("context.md")
     # planning + audit files from the workspace
-    for name in ("prompt-steps.md", "validation-report.txt", "pr-body.md"):
+    for name in ("prompt-steps.md", "review.md", "validation-report.txt", "pr-body.md"):
         src = hd / name
         if src.exists():
             shutil.copy2(src, audit_dir / name); copied.append(name)
