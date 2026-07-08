@@ -51,6 +51,10 @@ class Phase:
     # plan audit file (actual files touched vs approved Impacted Files; flags
     # scope additions). Used on the coding phase.
     record_execution: bool = False
+    # If True, after this phase the harness parses the reviewer's structured
+    # verdict (.harness/review.md). Issues => loop back to coding with the issues
+    # as feedback (bounded by max_review_retries); clean => advance.
+    review_gate: bool = False
 
 
 # ---- THE SPINE ----------------------------------------------------------
@@ -89,6 +93,19 @@ PHASES = (
         human_gate=True,                            # -> review code
         max_iterations=10,
         record_execution=True,                      # append actual-vs-approved audit
+    ),
+    Phase(
+        id="code_review",
+        title="Code review (independent reviewer LLM)",
+        kind=PhaseKind.MODEL,
+        # READ-ONLY on source: the reviewer inspects code but may write ONLY its
+        # verdict file into the workspace. Source stays frozen — a reviewer must
+        # not edit the code it is judging.
+        allowed_writes=(".harness/**",),
+        required_artifact=".harness/review.md",
+        human_gate=False,                           # review gate (harness-owned) follows
+        max_iterations=8,
+        review_gate=True,                           # harness parses verdict, may loop to coding
     ),
     Phase(
         id="unit_testing",

@@ -113,10 +113,20 @@ class HarnessConfig:
         "context":      ["build-context", "analyze-service"],
         "prompt_steps": ["build-prompt-steps"],
         "coding":       ["security-review"],
+        "code_review":  ["security-review", "review-angular-code"],
         "unit_testing": [],
         "documentation": [],
         "raise_pr":     [],
     })
+    # --- code review gate ---
+    # Reviewer model. Should DIFFER from the coding model (independent reviewer).
+    # If empty, model_for_phase falls back to phase_models/default like any phase.
+    # A same-as-coding value is allowed but the harness WARNS (per user choice).
+    review_model: str = ""
+    # On a review MISS (reviewer reports issues), loop back to this phase.
+    review_loopback_phase: str = "coding"
+    # Max review-driven retries before halting for a human (independent budget).
+    max_review_retries: int = 2
 
     @classmethod
     def load(cls, harness_dir: Path) -> "HarnessConfig":
@@ -151,11 +161,22 @@ class HarnessConfig:
             repo_stacks=data.get("repo_stacks") if data.get("repo_stacks") is not None else cls().repo_stacks,
             phase_file_scope=data.get("phase_file_scope") or cls().phase_file_scope,
             phase_skills=data.get("phase_skills") or cls().phase_skills,
+            review_model=data.get("review_model", cls.review_model),
+            review_loopback_phase=data.get("review_loopback_phase", cls.review_loopback_phase),
+            max_review_retries=int(data.get("max_review_retries", cls.max_review_retries)),
         )
 
     def model_for_phase(self, phase_id: str) -> str:
-        """Model for a phase: phase_models[phase_id] if set, else the default."""
+        """Model for a phase: phase_models[phase_id] if set, else the default.
+        For 'code_review', review_model wins when set (independent reviewer)."""
+        if phase_id == "code_review" and self.review_model:
+            return self.review_model
         return (self.phase_models or {}).get(phase_id, self.model)
+
+    def review_model_conflict(self) -> bool:
+        """True when the reviewer model resolves to the SAME model as coding —
+        an independence smell. Caller (runner) emits a warning; not a hard fail."""
+        return self.model_for_phase("code_review") == self.model_for_phase("coding")
 
     def estimate_cost(self, model: str, input_tokens: int, output_tokens: int) -> dict:
         """Estimate credits + USD for a token count on a model.
