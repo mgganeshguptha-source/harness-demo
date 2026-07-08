@@ -62,15 +62,19 @@ jobs:
           coverage_scope: "changed"
           coverage_loopback_phase: "unit_testing"
           max_coverage_retries: 2
-          coverage_metric: "LINE"   # or "BRANCH" for stricter logic coverage
           coverage_command: "./mvnw jacoco:report"
           coverage_csv: "target/site/jacoco/jacoco.csv"
+          coverage_metric: "LINE"
+          review_model: "gpt-5.4"
+          review_loopback_phase: "coding"
+          max_review_retries: 2
           story_file: "stories/current-story.md"
           model: "${{ github.event.inputs.model }}"
           phase_models:
-            context: "gpt-5-mini"
-            prompt_steps: "gpt-5-mini"
-            coding: "gpt-5-mini"
+            context: "gpt-5.4-mini"
+            prompt_steps: "gpt-5.4-mini"
+            coding: "gpt-5.4-mini"
+            code_review: "gemini-3.5-flash"
             unit_testing: "gpt-5-mini"
             documentation: "gpt-5-mini"
             raise_pr: "gpt-5-mini"
