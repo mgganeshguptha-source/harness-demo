@@ -112,6 +112,69 @@ class StateMachine:
                     return run
                 self.log("  [harness] clarification gate: clear (no open items)")
 
+            # ---- CODE REVIEW GATE ----
+            # After code_review, parse the independent reviewer's structured verdict.
+            # CHANGES_REQUESTED => loop back to coding with the issues as feedback,
+            # bounded by max_review_retries; on exhaustion halt + flag for a human.
+            if getattr(phase, "review_gate", False):
+                from review import parse_review
+                from config import HarnessConfig as _HC
+                cfg = _HC.load(self.harness_dir)
+                rv = parse_review(self.repo_root / ".harness" / "review.md")
+
+                if rv.passed:
+                    self.log("  [harness] code review gate: PASS")
+                else:
+                    run.review_attempts += 1
+                    loop = cfg.review_loopback_phase
+                    reason = ("no parseable VERDICT in review.md"
+                              if not rv.parse_ok else "reviewer requested changes")
+                    if loop and run.review_attempts <= cfg.max_review_retries:
+                        self.log(f"  ! CODE_REVIEW_CHANGES_REQUESTED ({reason}) — looping "
+                                 f"back to '{loop}' "
+                                 f"(attempt {run.review_attempts}/{cfg.max_review_retries})")
+                        for it in rv.issues:
+                            self.log("      • " + it)
+                        issues_block = "\n".join(f"- {i}" for i in rv.issues) or "- (see review.md)"
+                        run.last_feedback = (
+                            "An INDEPENDENT code reviewer requested changes. Fix the "
+                            "production code to address every issue below. Do not edit "
+                            "tests. Do not argue with the review — implement the fixes.\n"
+                            f"Reviewer issues:\n{issues_block}"
+                        )
+                        run.iterations[loop] = 0
+                        run.approvals[loop] = "rejected"
+                        run.current_phase = loop
+                        run.status = "running"
+                        run.save(self.harness_dir)
+                        return run
+
+                    # review retries exhausted -> HALT and flag for human
+                    self.log(f"  ! CODE_REVIEW_CHANGES_REQUESTED — retries exhausted "
+                             f"({run.review_attempts - 1}/{cfg.max_review_retries}); halting")
+                    issues_block = "\n".join(f"    - {i}" for i in rv.issues) or "    - (see review.md)"
+                    halt_msg = (
+                        "\n  ================ CODE REVIEW GATE: HALTED ================\n"
+                        f"  What was attempted : the harness looped back to "
+                        f"'{cfg.review_loopback_phase}' {run.review_attempts - 1} time(s) "
+                        f"to address independent-reviewer findings.\n"
+                        f"  Current status     : reviewer still reports "
+                        f"{'an unparseable verdict' if not rv.parse_ok else 'unresolved issues'} "
+                        f"after {cfg.max_review_retries} retries (NOT passed).\n"
+                        f"  Outstanding issues :\n{issues_block}\n"
+                        f"  Reviewer file      : {rv.scanned_file}\n"
+                        "  Recommendation     : a human should review the change and the "
+                        "reviewer notes together — either the code needs a fix the coding "
+                        "model can't converge on, or the review is over-strict and a person "
+                        "should adjudicate. The change has NOT advanced to testing.\n"
+                        "  =========================================================\n"
+                    )
+                    self.log(halt_msg)
+                    run.last_feedback = halt_msg
+                    run.status = "halted"
+                    run.save(self.harness_dir)
+                    return run
+
             # ---- DETERMINISTIC VALIDATION GATE ----
             # The harness (not the agent) runs the tests. Red => halt before advancing.
             if phase.validate_after:

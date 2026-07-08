@@ -33,6 +33,9 @@ class RunState:
     # repo-relative src/main files the coding phase actually wrote this run. Used
     # by the per-change coverage gate to scope coverage to ONLY the changed classes.
     changed_main_files: list = field(default_factory=list)
+    # how many times the code-review gate has failed and looped back to coding
+    # (independent budget from validation and coverage retries).
+    review_attempts: int = 0
     # cumulative token usage across all phases (for credit estimation)
     total_tokens: dict = field(default_factory=dict)
     # per-phase token usage + the model used, in execution order, for the
