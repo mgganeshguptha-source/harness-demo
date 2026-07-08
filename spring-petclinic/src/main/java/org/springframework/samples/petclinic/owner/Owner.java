@@ -144,6 +144,22 @@ public class Owner extends Person {
 		return null;
 	}
 
+	/**
+	 * Check whether this owner has a pet with the given name (case-insensitive). This
+	 * method is read-only and does not modify owner or pet state.
+	 * @param name the pet name to check; may be null
+	 * @return true if a pet with the given name exists for this owner (case-insensitive),
+	 * false otherwise
+	 */
+	public boolean hasPet(String name) {
+		// Per acceptance criteria: return false for null or empty names and perform a
+		// case-insensitive match
+		if (name == null || name.isEmpty()) {
+			return false;
+		}
+		return getPet(name) != null;
+	}
+
 	@Override
 	public String toString() {
 		return new ToStringCreator(this).append("id", this.getId())
