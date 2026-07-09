@@ -18,7 +18,10 @@ Python 3.11+.
 """
 from __future__ import annotations
 import asyncio
+import hashlib
+import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from phases import Phase
@@ -190,7 +193,7 @@ def _resolve_skill_assets(skill_md: Path, gh: Path) -> list:
         except Exception:
             return False
         seen_paths.add(cand)
-        found.append((cand.name, content))
+        found.append((cand.name, content, cand))
         return True
 
     # 1) templates the SKILL.md references by name
@@ -222,7 +225,7 @@ def _resolve_skill_assets(skill_md: Path, gh: Path) -> list:
     return found
 
 
-def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
+def _load_capability_layer(repo_root: Path, phase: Phase) -> tuple:
     """Load the capability layer for THIS phase.
 
     Config-driven (HarnessConfig):
@@ -239,6 +242,21 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
     cfg = HarnessConfig.load(repo_root / ".harness")
     gh = repo_root / ".github"
     chunks = []
+    # CAPABILITY MANIFEST: an auditable record of exactly which approved capability
+    # content (instructions, skills, templates) was delivered to the model for this
+    # phase — name, repo-relative path, size, sha256. This is the harness-side PROOF
+    # of deterministic skill delivery (the SDK's own 'loaded' telemetry only reports
+    # its internal agent skill and can never show repo skills).
+    manifest = {"instructions": [], "skills": [], "assets": []}
+
+    def _entry(p: Path, text: str, **extra):
+        try:
+            rel = str(p.resolve().relative_to(repo_root.resolve()))
+        except Exception:
+            rel = str(p)
+        raw = text.encode("utf-8")
+        return {"name": p.name, "path": rel, "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(), **extra}
 
     # ---- instructions ----
     instr_dir = gh / "instructions"
@@ -270,6 +288,7 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
                 else:
                     continue  # skip — not relevant to this phase
             chunks.append(f"\n--- instructions/{md.name} ---\n{text}")
+            manifest["instructions"].append(_entry(md, text))
 
     # ---- skills ----
     skills_dir = gh / "skills"
@@ -283,7 +302,9 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
             if wanted is not None and skill_name not in wanted:
                 continue
             try:
-                chunks.append(f"\n--- skill: {skill_name} ---\n" + skill_md.read_text(encoding="utf-8"))
+                skill_text = skill_md.read_text(encoding="utf-8")
+                chunks.append(f"\n--- skill: {skill_name} ---\n" + skill_text)
+                manifest["skills"].append(_entry(skill_md, skill_text, skill=skill_name))
             except Exception:
                 pass
             # Inline any template/companion .md files this skill references, so the
@@ -291,7 +312,7 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
             # mode the skill engine does not auto-resolve these file references, so
             # without this the model sees a dangling "follow template.md" pointer and
             # improvises — breaking output standardization.
-            for asset_name, asset_text in _resolve_skill_assets(skill_md, gh):
+            for asset_name, asset_text, asset_path in _resolve_skill_assets(skill_md, gh):
                 chunks.append(
                     f"\n--- skill '{skill_name}' REQUIRED template: {asset_name} ---\n"
                     f"You MUST produce output that follows this template's EXACT structure, "
@@ -300,8 +321,9 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
                     f"when the template explicitly says it is optional/skippable.\n\n"
                     f"{asset_text}"
                 )
+                manifest["assets"].append(_entry(asset_path, asset_text, for_skill=skill_name))
 
-    return "\n".join(chunks)
+    return "\n".join(chunks), manifest
 
 
 def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
@@ -462,9 +484,39 @@ class SdkAgentRunner:
             return PermissionDecisionApproveOnce()
 
         # Build the prompt: capability layer (skills/instructions) + phase task.
-        capability = _load_capability_layer(repo_root, phase)
+        capability, cap_manifest = _load_capability_layer(repo_root, phase)
         task = _phase_instruction(phase, run, repo_root)
         full_prompt = (capability + "\n\n" if capability else "") + task
+
+        # ---- CAPABILITY MANIFEST: log + persist the proof of injection ----
+        # One human-readable log line per phase, plus a merge-written JSON in the
+        # workspace (collected into the audit trail). This is the auditable evidence
+        # that the organization's approved skills/templates were DELIVERED to the
+        # model this run — hash-verified, independent of SDK skill telemetry.
+        def _fmt(items):
+            return "[" + ", ".join(f"{i['name']}({i['sha256'][:8]})" for i in items) + "]"
+        self.log(f"  [capability] phase '{phase.id}': "
+                 f"skills={_fmt(cap_manifest['skills'])} "
+                 f"templates={_fmt(cap_manifest['assets'])} "
+                 f"instructions={len(cap_manifest['instructions'])} file(s)")
+        try:
+            mf_path = repo_root / ".harness" / "capability-manifest.json"
+            existing = {}
+            if mf_path.exists():
+                try:
+                    existing = json.loads(mf_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+            phases = existing.get("phases", {})
+            phases[phase.id] = {
+                "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                **cap_manifest,
+            }
+            existing["phases"] = phases
+            mf_path.parent.mkdir(parents=True, exist_ok=True)
+            mf_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.log(f"  [capability] manifest write failed (non-fatal): {e}")
 
         # per-phase model: config phase_models[phase_id] overrides the default model.
         from config import HarnessConfig as _HC
