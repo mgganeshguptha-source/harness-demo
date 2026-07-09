@@ -18,6 +18,7 @@ Python 3.11+.
 """
 from __future__ import annotations
 import asyncio
+import re
 from pathlib import Path
 
 from phases import Phase
@@ -145,6 +146,82 @@ def _extract_names(data, *attr_candidates) -> list[str]:
     return deduped
 
 
+# Reference patterns a SKILL.md might use to point at a companion template/asset .md.
+# We inline the CONTENT of any referenced .md so the model actually receives the
+# template — non-interactive SDK runs do NOT auto-resolve a skill's file refs the
+# way the interactive Copilot skill engine does.
+_MD_REF = re.compile(r"[`'\"(]?([A-Za-z0-9_./-]+\.md)[`'\")]?")
+# Names that are almost certainly companion assets worth inlining even if the ref
+# is loose. We also inline ANY .md the SKILL.md names that resolves on disk.
+_TEMPLATE_HINT = re.compile(r"template|analysis|schema|format|skeleton|scaffold", re.IGNORECASE)
+
+
+def _resolve_skill_assets(skill_md: Path, gh: Path) -> list:
+    """Find companion files to inline for a skill, returning (label, content) pairs.
+
+    Two sources, de-duplicated against each other:
+      1) TEMPLATES REFERENCED by name in the SKILL.md text (resolved across the
+         skill folder, .github/skills/, and .github/).
+      2) ASSET SWEEP: every .md directly under THIS skill's own assets/ folder,
+         whether or not the SKILL.md names it. This matches the repo convention
+         (templates live in <skill>/assets/) and removes the fragile dependency on
+         the SKILL.md spelling out the exact filename.
+
+    Never inlines the SKILL.md itself; caps total to avoid runaway prompt growth.
+    """
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except Exception:
+        text = ""
+    skill_dir = skill_md.parent
+    search_roots = [skill_dir, gh / "skills", gh]
+    found = []
+    seen_paths = set()
+
+    def _add(cand: Path):
+        """Inline a resolved .md candidate once. Returns True if added."""
+        cand = cand.resolve()
+        if cand in seen_paths:
+            return False
+        if not cand.is_file() or cand.suffix.lower() != ".md" or cand.name.lower() == "skill.md":
+            return False
+        try:
+            content = cand.read_text(encoding="utf-8")
+        except Exception:
+            return False
+        seen_paths.add(cand)
+        found.append((cand.name, content))
+        return True
+
+    # 1) templates the SKILL.md references by name
+    for m in _MD_REF.finditer(text):
+        ref = m.group(1).strip()
+        base = ref.split("/")[-1]
+        if base.lower() == "skill.md":
+            continue
+        candidates = [(skill_dir / ref)]
+        for root in search_roots:
+            if root.is_dir():
+                candidates.extend(root.rglob(base))
+        for cand in candidates:
+            if _add(cand):
+                break  # first resolving candidate wins for this ref
+        if len(found) >= 8:
+            break
+
+    # 2) sweep THIS skill's own assets/ folder — inline any .md not already added.
+    # Scoped to the skill's assets/ (not a global sweep), so we only pick up the
+    # skill's own companion files.
+    assets_dir = skill_dir / "assets"
+    if assets_dir.is_dir():
+        for asset in sorted(assets_dir.rglob("*.md")):
+            _add(asset)
+            if len(found) >= 8:
+                break
+
+    return found
+
+
 def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
     """Load the capability layer for THIS phase.
 
@@ -209,6 +286,20 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> str:
                 chunks.append(f"\n--- skill: {skill_name} ---\n" + skill_md.read_text(encoding="utf-8"))
             except Exception:
                 pass
+            # Inline any template/companion .md files this skill references, so the
+            # model actually RECEIVES the template content. In non-interactive SDK
+            # mode the skill engine does not auto-resolve these file references, so
+            # without this the model sees a dangling "follow template.md" pointer and
+            # improvises — breaking output standardization.
+            for asset_name, asset_text in _resolve_skill_assets(skill_md, gh):
+                chunks.append(
+                    f"\n--- skill '{skill_name}' REQUIRED template: {asset_name} ---\n"
+                    f"You MUST produce output that follows this template's EXACT structure, "
+                    f"section order, and headings. Do not add, rename, drop, or reorder "
+                    f"sections. Fill each section per its instructions; omit a section only "
+                    f"when the template explicitly says it is optional/skippable.\n\n"
+                    f"{asset_text}"
+                )
 
     return "\n".join(chunks)
 
