@@ -124,16 +124,33 @@ def cmd_reject(args):
     print(f"Rejected '{run.current_phase}'. It will re-run with your feedback on next `run`.")
 
 
+def _run_id() -> str:
+    """A unique-per-run identifier for the audit subfolder. In CI, GitHub's
+    run id is stable and collision-free; locally we fall back to a UTC
+    timestamp. This makes audit/<feature>/<run_id>/ unique per run so context,
+    run-summary, and every other artifact are retained rather than overwritten."""
+    import os
+    from datetime import datetime, timezone
+    rid = os.environ.get("GITHUB_RUN_ID")
+    if rid:
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT")
+        return f"{rid}-{attempt}" if attempt and attempt != "1" else rid
+    return datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S")
+
+
 def cmd_collect_audit(args):
-    """Collect the run's audit artifacts into audit/<feature>/ for permanent
-    retention in the repo. Gathers: the context file(s), prompt-steps.md (which
-    includes the appended EXECUTION RECORD), validation-report.txt, pr-body.md,
-    and a run-summary with token/cost totals. The PR step then commits this folder."""
+    """Collect the run's audit artifacts into audit/<feature>/<run_id>/ for
+    permanent retention in the repo. Gathers: the context file(s), prompt-steps.md
+    (which includes the appended EXECUTION RECORD), validation-report.txt,
+    pr-body.md, and a run-summary with token/cost totals. The PR step then commits
+    this folder. Each run writes to its OWN run_id subfolder, so re-running the
+    same feature never overwrites a prior run's trail."""
     import shutil, json
     repo = Path(args.repo).resolve()
     run = _load(repo)
     feature = run.feature_id
-    audit_dir = repo / "audit" / feature
+    run_id = _run_id()
+    audit_dir = repo / "audit" / feature / run_id
     audit_dir.mkdir(parents=True, exist_ok=True)
 
     hd = _harness_dir(repo)
@@ -156,6 +173,7 @@ def cmd_collect_audit(args):
     # a machine-readable run summary (tokens, cost, phases, status)
     summary = {
         "feature": feature,
+        "run_id": run_id,
         "status": run.status,
         "completed_phases": run.completed_phases,
         "total_tokens": run.total_tokens,
@@ -164,7 +182,7 @@ def cmd_collect_audit(args):
     (audit_dir / "run-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     copied.append("run-summary.json")
 
-    print(f"Collected audit trail into audit/{feature}/:")
+    print(f"Collected audit trail into audit/{feature}/{run_id}/:")
     for c in copied:
         print(f"  - {c}")
 
