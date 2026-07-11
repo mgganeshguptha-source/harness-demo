@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -326,7 +327,90 @@ def _load_capability_layer(repo_root: Path, phase: Phase) -> tuple:
     return "\n".join(chunks), manifest
 
 
-def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
+# ---------------------------------------------------------------------------
+# PUSH-MODE CODE REVIEW (diff-scoping)
+#
+# Instead of telling the reviewer "go read the repo" (pull mode — 15+ tool
+# calls, unbounded exploration, ~557K tokens observed on a loopback pass),
+# the harness gathers the review material DETERMINISTICALLY (zero LLM tokens)
+# and inlines it into the prompt:
+#   1. git diff HEAD -- src/main          (the exact production change)
+#   2. full content of every changed/new production source file
+#   3. the implementation plan (.harness/prompt-steps.md)
+# The reviewer then needs ~1-2 turns: reason once, write review.md. Read
+# permission is DENIED for this phase (see on_permission_request), so the
+# review is reproducible — the reviewer cannot wander into unrelated code.
+# If the dossier cannot be built (git unavailable, no changed files), the
+# harness FALLS BACK to the legacy pull-mode prompt and read access.
+# ---------------------------------------------------------------------------
+
+_DOSSIER_FILE_CAP = 40_000    # chars per inlined file
+_DOSSIER_TOTAL_CAP = 200_000  # chars for the whole dossier (~50K tokens)
+
+
+def _run_git(repo_root: Path, *args: str) -> str:
+    """Run a git command in repo_root; return stdout, or '' on any failure."""
+    try:
+        r = subprocess.run(
+            ["git", *args], cwd=str(repo_root),
+            capture_output=True, text=True, timeout=60,
+        )
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _build_review_dossier(repo_root: Path, log=print) -> str | None:
+    """Assemble the inline review material. Returns None if nothing changed
+    (or git failed) — caller falls back to legacy pull-mode review."""
+    diff = _run_git(repo_root, "diff", "HEAD", "--", "src/main")
+    tracked = [ln.strip() for ln in _run_git(
+        repo_root, "diff", "HEAD", "--name-only", "--", "src/main"
+    ).splitlines() if ln.strip()]
+    untracked = [ln.strip() for ln in _run_git(
+        repo_root, "ls-files", "--others", "--exclude-standard", "--", "src/main"
+    ).splitlines() if ln.strip()]
+    changed = list(dict.fromkeys(tracked + untracked))  # de-dupe, keep order
+    if not changed:
+        return None
+
+    parts: list[str] = []
+    if diff.strip():
+        parts.append(
+            "--- GIT DIFF (production source: HEAD vs working tree) ---\n" + diff
+        )
+    for rel in changed:
+        p = repo_root / rel
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if len(text) > _DOSSIER_FILE_CAP:
+            text = text[:_DOSSIER_FILE_CAP] + "\n... [TRUNCATED by harness — file cap reached]"
+        parts.append(f"--- FULL FILE (current content): {rel} ---\n{text}")
+
+    plan = repo_root / ".harness" / "prompt-steps.md"
+    if plan.is_file():
+        try:
+            parts.append(
+                "--- IMPLEMENTATION PLAN: .harness/prompt-steps.md ---\n"
+                + plan.read_text(encoding="utf-8")
+            )
+        except Exception:
+            pass
+
+    if not parts:
+        return None
+    dossier = "\n\n".join(parts)
+    if len(dossier) > _DOSSIER_TOTAL_CAP:
+        dossier = dossier[:_DOSSIER_TOTAL_CAP] + "\n... [TRUNCATED by harness — dossier cap reached]"
+    log(f"  [review] push-mode dossier: {len(changed)} changed file(s), "
+        f"{len(dossier)} chars inlined")
+    return dossier
+
+
+def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
+                       review_dossier: str | None = None) -> str:
     """The per-phase task prompt. Phase-specific, story-aware, feedback-aware.
 
     All output paths are given as ABSOLUTE paths derived from repo_root. In a
@@ -343,6 +427,60 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
     src_test = f"{rr}/src/test"
     docs_dir = f"{rr}/docs"
     pr_body = f"{rr}/.harness/pr-body.md"
+
+    # code_review prompt: PUSH MODE (dossier inlined, reads disabled) when the
+    # harness could build the dossier; legacy PULL MODE (agent reads the repo)
+    # only as a fallback.
+    _review_rules = (
+        f"Judge the PRODUCTION CODE on: correctness against the story and "
+        f"plan, edge-case handling in the code itself (null/empty/boundary logic), "
+        f"security, error handling, readability, and adherence to project standards. "
+        f"Use the security-review skill.\n"
+        f"SCOPE — WHAT YOU MUST NOT DO:\n"
+        f"  - Do NOT review, run, inspect, or comment on unit tests or TEST COVERAGE. "
+        f"Test existence and coverage are enforced by a SEPARATE automated gate later "
+        f"in the pipeline — they are OUT OF SCOPE for this review.\n"
+        f"  - Do NOT request changes on the grounds that tests are missing, insufficient, "
+        f"or that coverage is low. A verdict of CHANGES_REQUESTED must be justified by a "
+        f"problem in the PRODUCTION CODE itself, never by anything test-related.\n"
+        f"  - Do NOT run the build or tests. Do NOT edit, create, or fix any source or "
+        f"test file — reviewing is not fixing.\n"
+        f"The ONLY file you may write is the verdict at this EXACT path (parent .harness "
+        f"ALREADY EXISTS, shell disallowed): {rr}/.harness/review.md\n"
+        f"Write {rr}/.harness/review.md in EXACTLY this structure:\n"
+        f"  - First line MUST be:  VERDICT: PASS   (if the production code is correct and ready)\n"
+        f"    or:                  VERDICT: CHANGES_REQUESTED   (only if the production code has a problem)\n"
+        f"  - If CHANGES_REQUESTED, list each problem on its own line as:\n"
+        f"      [ISSUE]: <specific, actionable description of the CODE problem and where>\n"
+        f"  - You may add free-form notes after the issues.\n"
+        f"Be strict about production-code correctness, safety, and standards — but if the "
+        f"only thing you could fault is test coverage, the verdict is PASS. "
+        f"Write ONLY {rr}/.harness/review.md."
+    )
+    if review_dossier is not None:
+        code_review_task = (
+            f"You are an INDEPENDENT code reviewer. You did NOT write this code. "
+            f"Review ONLY the production source implementation of the change for:\n"
+            f"  STORY: {story}\n"
+            f"ALL review material is provided INLINE below — the git diff, the full "
+            f"current content of every changed production file, and the implementation "
+            f"plan. Review ONLY this material. Do NOT read, open, list, glob, or search "
+            f"any file in the repository — file-read access is DISABLED for this phase "
+            f"and any read attempt will be denied. Do NOT ask for more files; everything "
+            f"in scope is below. After reasoning, write your verdict file immediately.\n"
+            f"{_review_rules}\n\n"
+            f"================ REVIEW MATERIAL (inlined by harness) ================\n\n"
+            f"{review_dossier}\n\n"
+            f"================ END REVIEW MATERIAL ================\n"
+        )
+    else:
+        code_review_task = (
+            f"You are an INDEPENDENT code reviewer. You did NOT write this code. "
+            f"Review ONLY the production source implementation of the change for:\n  STORY: {story}\n"
+            f"Read (read-only) the plan at {plan_file} and the application source under "
+            f"{src_main}/. Do NOT open or read files under {src_test}/.\n"
+            f"{_review_rules}"
+        )
 
     base = {
         "context": (
@@ -380,36 +518,7 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path) -> str:
             f"Implement the change described in {plan_file} for:\n  STORY: {story}\n"
             f"Edit ONLY application source under {src_main}/. Do NOT create or edit any test files."
         ),
-        "code_review": (
-            f"You are an INDEPENDENT code reviewer. You did NOT write this code. "
-            f"Review ONLY the production source implementation of the change for:\n  STORY: {story}\n"
-            f"Read (read-only) the plan at {plan_file} and the application source under "
-            f"{src_main}/. Judge the PRODUCTION CODE on: correctness against the story and "
-            f"plan, edge-case handling in the code itself (null/empty/boundary logic), "
-            f"security, error handling, readability, and adherence to project standards. "
-            f"Use the security-review skill.\n"
-            f"SCOPE — WHAT YOU MUST NOT DO:\n"
-            f"  - Do NOT review, run, inspect, or comment on unit tests or TEST COVERAGE. "
-            f"Test existence and coverage are enforced by a SEPARATE automated gate later "
-            f"in the pipeline — they are OUT OF SCOPE for this review. Do NOT open or read "
-            f"files under {src_test}/.\n"
-            f"  - Do NOT request changes on the grounds that tests are missing, insufficient, "
-            f"or that coverage is low. A verdict of CHANGES_REQUESTED must be justified by a "
-            f"problem in the PRODUCTION CODE itself, never by anything test-related.\n"
-            f"  - Do NOT run the build or tests. Do NOT edit, create, or fix any source or "
-            f"test file — reviewing is not fixing.\n"
-            f"The ONLY file you may write is the verdict at this EXACT path (parent .harness "
-            f"ALREADY EXISTS, shell disallowed): {rr}/.harness/review.md\n"
-            f"Write {rr}/.harness/review.md in EXACTLY this structure:\n"
-            f"  - First line MUST be:  VERDICT: PASS   (if the production code is correct and ready)\n"
-            f"    or:                  VERDICT: CHANGES_REQUESTED   (only if the production code has a problem)\n"
-            f"  - If CHANGES_REQUESTED, list each problem on its own line as:\n"
-            f"      [ISSUE]: <specific, actionable description of the CODE problem and where>\n"
-            f"  - You may add free-form notes after the issues.\n"
-            f"Be strict about production-code correctness, safety, and standards — but if the "
-            f"only thing you could fault is test coverage, the verdict is PASS. "
-            f"Write ONLY {rr}/.harness/review.md."
-        ),
+        "code_review": code_review_task,
         "unit_testing": (
             f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
             f"Do NOT modify application code under {src_main}/. Tests only."
@@ -458,6 +567,17 @@ class SdkAgentRunner:
 
         attempted_writes: list[str] = []
 
+        # PUSH-MODE REVIEW: build the dossier deterministically BEFORE the SDK
+        # call (zero LLM tokens). If it builds, the reviewer gets everything
+        # inline and read access is disabled below; if not, legacy pull mode.
+        review_dossier: str | None = None
+        if phase.id == "code_review":
+            review_dossier = _build_review_dossier(repo_root, log=self.log)
+            if review_dossier is None:
+                self.log("  [review] dossier unavailable — falling back to "
+                         "legacy pull-mode review (reads allowed)")
+        review_push_mode = review_dossier is not None
+
         # ---- THE INTERLOCK (real-time, at the SDK) ----
         def on_permission_request(request, invocation):
             # NOTE: request.kind is a plain string (ClassVar), NOT an enum.
@@ -479,13 +599,24 @@ class SdkAgentRunner:
                 return PermissionDecisionReject(
                     feedback="Shell commands are not permitted in this phase."
                 )
+            if kind == "read" and review_push_mode:
+                # PUSH-MODE REVIEW: everything in scope is already inline in the
+                # prompt. Denying reads makes the review reproducible and stops
+                # the exploratory token burn (16 turns / 557K tokens observed).
+                target = getattr(request, "file_name", "") or ""
+                self.log(f"  ! read denied (push-mode review): {target}")
+                return PermissionDecisionReject(
+                    feedback="All review material (diff, full changed files, plan) is "
+                             "already inlined in your prompt. Do not read files. "
+                             "Write your verdict to .harness/review.md now."
+                )
             # read / url / memory / etc -> approve for the PoC (tighten later)
             self.log(f"  . {kind} request -> approved")
             return PermissionDecisionApproveOnce()
 
         # Build the prompt: capability layer (skills/instructions) + phase task.
         capability, cap_manifest = _load_capability_layer(repo_root, phase)
-        task = _phase_instruction(phase, run, repo_root)
+        task = _phase_instruction(phase, run, repo_root, review_dossier=review_dossier)
         full_prompt = (capability + "\n\n" if capability else "") + task
 
         # ---- CAPABILITY MANIFEST: log + persist the proof of injection ----
