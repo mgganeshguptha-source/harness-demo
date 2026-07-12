@@ -94,24 +94,33 @@ class PhaseExecutor:
             _model = _cfg.model_for_phase(phase.id) if _cfg else ""
             _in = result.tokens.get("input", 0) or 0
             _out = result.tokens.get("output", 0) or 0
-            est = _cfg.estimate_cost(_model, _in, _out) if _cfg else {"credits": None, "usd": None, "included": False}
+            _cached = result.tokens.get("cache_read", 0) or 0
+            _cwrite = result.tokens.get("cache_write", 0) or 0
+            est = (_cfg.estimate_cost(_model, _in, _out, cached_tokens=_cached,
+                                      cache_write_tokens=_cwrite)
+                   if _cfg else {"credits": None, "usd": None, "partial": False})
             run.phase_token_log.append({
                 "phase": phase.id,
                 "model": _model,
                 "phase_tokens": phase_io,
                 "cumulative_tokens": cumulative,
+                "input_tokens": _in,
+                "output_tokens": _out,
+                "cached_tokens": _cached,
+                "cache_write_tokens": _cwrite,
                 "est_credits": est.get("credits"),
                 "est_usd": est.get("usd"),
-                "included": est.get("included", False),
+                "included": False,   # usage-based billing: no model is free
+                "partial": est.get("partial", False),
                 "skills_loaded": list(getattr(result, "skills_loaded", []) or []),
                 "tools_invoked": list(getattr(result, "tools_invoked", []) or []),
             })
-            if est.get("included"):
-                cost_str = "included (0 credits)"
-            elif est.get("credits") is not None:
+            if est.get("credits") is not None:
                 cost_str = f"~{est['credits']:.1f} credits (~${est['usd']:.4f})"
+                if est.get("partial"):
+                    cost_str += " [partial: cache-write not reported]"
             else:
-                cost_str = "rate unknown"
+                cost_str = f"rate unknown for model '{_model}'"
             self.log(f"  [tokens] {phase.id}: {phase_io} tokens "
                      f"(running total: {cumulative}) | est cost: {cost_str}")
         else:
@@ -130,7 +139,8 @@ class PhaseExecutor:
                                          + (run.total_tokens.get("output", 0) or 0),
                     "est_credits": 0.0,
                     "est_usd": 0.0,
-                    "included": True,
+                    "included": False,  # zero because no tokens, not a free model
+                    "partial": False,
                     "skills_loaded": _sk,
                     "tools_invoked": _tl,
                 })

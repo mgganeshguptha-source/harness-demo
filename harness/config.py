@@ -31,22 +31,51 @@ class HarnessConfig:
     # models on coding/testing.
     phase_models: dict = field(default_factory=dict)
     # --- cost estimation (token -> credit -> $) ---
-    # Published Copilot per-1M-token rates [input_usd, output_usd]. 1 credit=$0.01.
-    # ESTIMATE only; authoritative charge is GitHub's billing page. Verify at
-    # docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+    # GitHub Copilot moved to USAGE-BASED billing on 2026-06-01. Under that model
+    # there are no "premium request multipliers" (that is the legacy request-based
+    # system) and there are NO zero-cost "included" models: every model is priced
+    # PER TOKEN, and the total converts to AI credits at 1 credit = $0.01.
+    #
+    # Rates below are USD per 1M tokens: [input, cached_input, output].
+    # Source: docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+    # (verified 2026-07-12). Rates change — re-check when they do.
+    #
+    # NOTE on gpt-5-mini: it was previously treated as free ("included"). That is
+    # WRONG under usage-based billing — it bills at $0.25/$0.025/$2.00 per 1M.
+    # Treating it as 0 under-reported a real run by ~2.2x (7.3 cr est vs 16 cr billed).
     model_rates: dict = field(default_factory=lambda: {
-        "gpt-5-mini":        [0.25, 2.00],
-        "gpt-4.1":           [0.0, 0.0],
-        "gpt-5.4":           [2.50, 15.00],
-        "gpt-5.4-mini":      [0.25, 2.00],
-        "gpt-5.3-codex":     [2.50, 15.00],
-        "claude-haiku-4.5":  [1.00, 5.00],
-        "claude-sonnet-4.5": [3.00, 15.00],
-        "claude-sonnet-4.6": [3.00, 15.00],
-        "gemini-3.5-flash":  [0.30, 2.50],
+        # OpenAI
+        "gpt-5-mini":        [0.25, 0.025, 2.00],
+        "gpt-5.4-mini":      [0.75, 0.075, 4.50],
+        "gpt-5.4-nano":      [0.20, 0.02,  1.25],
+        "gpt-5.4":           [2.50, 0.25, 15.00],
+        "gpt-5.3-codex":     [1.75, 0.175, 14.00],
+        "gpt-5.5":           [5.00, 0.50, 30.00],
+        # Anthropic (also carry a cache-WRITE rate, see cache_write_rates)
+        "claude-haiku-4.5":  [1.00, 0.10,  5.00],
+        "claude-sonnet-4.5": [3.00, 0.30, 15.00],
+        "claude-sonnet-4.6": [3.00, 0.30, 15.00],
+        "claude-sonnet-5":   [2.00, 0.20, 10.00],
+        "claude-opus-4.5":   [5.00, 0.50, 25.00],
+        # Google
+        "gemini-2.5-pro":    [1.25, 0.125, 10.00],
+        "gemini-3-flash":    [0.50, 0.05,  3.00],
+        "gemini-3.5-flash":  [1.50, 0.15,  9.00],
+        # Fine-tuned / others
+        "raptor-mini":       [0.25, 0.025, 2.00],
+        "mai-code-1-flash":  [0.75, 0.075, 4.50],
     })
-    # Models INCLUDED on paid plans — consume zero credits regardless of tokens.
-    included_models: list = field(default_factory=lambda: ["gpt-5-mini", "gpt-4.1"])
+    # Anthropic models bill cache WRITES separately (USD per 1M tokens). The SDK
+    # does not report cache-write tokens, so we cannot price them — they are the
+    # main known source of UNDER-estimation on Anthropic phases. Kept here for
+    # documentation and future use if the SDK starts reporting them.
+    cache_write_rates: dict = field(default_factory=lambda: {
+        "claude-haiku-4.5":  1.25,
+        "claude-sonnet-4.5": 3.75,
+        "claude-sonnet-4.6": 3.75,
+        "claude-sonnet-5":   2.50,
+        "claude-opus-4.5":   6.25,
+    })
     # Deterministic normalization run by the HARNESS before validation.
     # spring-javaformat:apply rewrites files to the project's required format.
     # Empty string => skip. This is a fixed, known goal — not arbitrary execution.
@@ -144,7 +173,7 @@ class HarnessConfig:
             model=data.get("model", cls.model),
             phase_models=data.get("phase_models") or {},
             model_rates=data.get("model_rates") or cls().model_rates,
-            included_models=data.get("included_models") or cls().included_models,
+            cache_write_rates=data.get("cache_write_rates") or cls().cache_write_rates,
             pre_validation_command=data.get("pre_validation_command", cls.pre_validation_command),
             validation_loopback_phase=data.get("validation_loopback_phase", cls.validation_loopback_phase),
             max_validation_retries=int(data.get("max_validation_retries", cls.max_validation_retries)),
@@ -178,18 +207,45 @@ class HarnessConfig:
         an independence smell. Caller (runner) emits a warning; not a hard fail."""
         return self.model_for_phase("code_review") == self.model_for_phase("coding")
 
-    def estimate_cost(self, model: str, input_tokens: int, output_tokens: int) -> dict:
-        """Estimate credits + USD for a token count on a model.
-        Returns {credits, usd, included}. 1 credit = $0.01.
-        Cached tokens are treated as input here (conservative simplification)."""
-        if model in (self.included_models or []):
-            return {"credits": 0.0, "usd": 0.0, "included": True}
+    def estimate_cost(self, model: str, input_tokens: int, output_tokens: int,
+                      cached_tokens: int = 0, cache_write_tokens: int = 0) -> dict:
+        """Estimate credits + USD for a phase's token usage. 1 credit = $0.01.
+
+        Usage-based billing (GitHub, from 2026-06-01): every model bills per token.
+        There is no zero-cost 'included' tier and no request multipliers.
+
+        Token split:
+          - `input_tokens`  : TOTAL prompt tokens (cache reads INCLUDED in this).
+          - `cached_tokens` : the cache-read portion of the above; bills at ~10%
+                              of the fresh-input rate, so we subtract and reprice.
+          - `cache_write_tokens`: Anthropic-only; billed at its own higher rate.
+
+        Returns {credits, usd, included, partial}. `included` is always False and
+        is retained so older log entries/readers keep working. `partial` is True
+        when a billable component exists for this model but was NOT reported by
+        the SDK (so the figure is a known under-estimate).
+        """
         rates = (self.model_rates or {}).get(model)
         if not rates:
-            return {"credits": None, "usd": None, "included": False}
-        in_rate, out_rate = rates[0], rates[1]
-        usd = (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000.0
-        return {"credits": usd / 0.01, "usd": usd, "included": False}
+            # Unknown model -> refuse to guess. A blank beats a wrong number.
+            return {"credits": None, "usd": None, "included": False, "partial": False}
+        in_rate, cached_rate, out_rate = rates[0], rates[1], rates[2]
+        cached = max(int(cached_tokens or 0), 0)
+        cwrite = max(int(cache_write_tokens or 0), 0)
+        fresh_in = max(int(input_tokens or 0) - cached, 0)
+
+        usd = (fresh_in * in_rate
+               + cached * cached_rate
+               + int(output_tokens or 0) * out_rate) / 1_000_000.0
+
+        cw_rate = (self.cache_write_rates or {}).get(model)
+        if cw_rate:
+            usd += (cwrite * cw_rate) / 1_000_000.0
+        # under-estimate flag: model bills cache writes but none were reported
+        partial = bool(cw_rate) and cwrite == 0
+
+        return {"credits": usd / 0.01, "usd": usd,
+                "included": False, "partial": partial}
 
     def resolved_test_command(self) -> str:
         """Build the actual command string, applying the targeted filter if set."""
