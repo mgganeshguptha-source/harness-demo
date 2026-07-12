@@ -185,14 +185,16 @@ def cmd_collect_audit(args):
             "basis": "per-token pricing from GitHub's published usage-based rates; "
                      "1 AI credit = $0.01. No model is free under usage-based "
                      "billing (incl. gpt-5-mini).",
+            "calibration": "measured against GitHub Billing on 2 runs: 14.5/16 (91%) "
+                           "and 25.3/27 (94%) — tends to run slightly UNDER actual",
             "known_divergences": [
-                "cache-write tokens not reported by the SDK (Anthropic models) — "
-                "flagged per-phase as 'partial'",
-                "any token class the SDK omits or under-reports",
+                "cache-write tokens are counted but NOT priced — pricing them was "
+                "measured to overshoot actual billing badly (136%)",
+                "token classes the SDK may report differently from how GitHub bills",
                 "published rates may have changed since this config was updated",
                 "phases whose model has no configured rate are excluded from totals",
             ],
-            "direction": "estimate is a LOWER BOUND; actual charge is typically higher",
+            "direction": "approximate LOWER BOUND (~90-95% of actual)",
             "authoritative_source": "GitHub Billing — AI-credit balance delta "
                                     "before/after the run "
                                     "(github.com/settings/copilot/features)",
@@ -249,23 +251,26 @@ def _report(run: RunState):
             print(f"    phases are EXCLUDED from the total above.")
 
         # ---------------- DISCLAIMER ----------------
-        # Deliberately does NOT quote an accuracy percentage. A single observed
-        # run (est 14.5 cr vs 16 cr billed) is not a general guarantee: the error
-        # depends on the model mix and on which token classes the SDK reports.
-        # State what is missing and where truth lives; let the reader compare.
+        # Calibrated against two real runs (est vs GitHub Billing credit delta):
+        #   run 29174592092: 14.5 est / 16 billed  (91%)
+        #   run 29181773991: 25.3 est / 27 billed  (94%)
+        # State the measured band and the direction; do not overclaim precision.
         print("\n  ---------------------------------------------------------------")
         print("  DISCLAIMER — this is an ESTIMATE, not the billed amount.")
         print("  Priced per-token from GitHub's published usage-based rates")
         print("  (1 credit = $0.01). Under usage-based billing NO model is free —")
-        print("  gpt-5-mini is billed too. Known sources of DIVERGENCE, all of")
-        print("  which make the real charge HIGHER than the figure above:")
-        print("    - cache-WRITE tokens the SDK does not report (Anthropic models)")
-        print("    - any token class the SDK omits or under-reports")
+        print("  gpt-5-mini is billed too.")
+        print("  Calibration: on the runs measured so far this estimate has landed")
+        print("  at roughly 90-95% of the actual billed credits, i.e. it tends to")
+        print("  run SLIGHTLY UNDER. Treat it as an approximate LOWER BOUND.")
+        print("  Known sources of divergence:")
+        print("    - token classes the SDK reports differently from how GitHub bills")
+        print("      (cache-write tokens are counted but deliberately NOT priced —")
+        print("       pricing them was measured to overshoot badly)")
         print("    - published rates changing after this config was last updated")
         print("    - phases whose model has no rate in config (excluded entirely)")
-        print("  Treat the number as a lower-bound sanity check for spotting")
-        print("  runaway phases — NOT as a billing figure, and not for client")
-        print("  reporting. For ACTUAL usage and cost, use GitHub Billing:")
+        print("  Use it to spot runaway phases — NOT as a billing figure, and not")
+        print("  for client reporting. For ACTUAL usage and cost, use GitHub Billing:")
         print("    github.com/settings/copilot/features  (personal account)")
         print("    -> Usage / 'View details', or take the AI-credit balance")
         print("       delta immediately before and after the run.")

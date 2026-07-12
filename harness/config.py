@@ -238,11 +238,25 @@ class HarnessConfig:
                + cached * cached_rate
                + int(output_tokens or 0) * out_rate) / 1_000_000.0
 
+        # CACHE-WRITE: reported by the SDK, but deliberately NOT priced.
+        #
+        # GitHub publishes a separate cache-write rate for Anthropic models
+        # ($1.25/1M for Haiku 4.5), so charging it looked correct on paper. It is
+        # not, measured against real billing:
+        #     run 29174592092 (16 cr billed): excl. cache-write -> 14.5 cr  (91%)
+        #     run 29181773991 (27 cr billed): excl. cache-write -> 25.3 cr  (94%)
+        #                                     incl. cache-write -> 36.8 cr (136%)
+        # Two runs, both accurate when cache-write is excluded, both badly over
+        # when it is included. The most likely explanation is that the SDK's
+        # cache_write counter is not the billable class GitHub's rate refers to
+        # (or those tokens are already inside `input`). Either way: measurement
+        # beats inference. We report the count and do not charge for it.
         cw_rate = (self.cache_write_rates or {}).get(model)
-        if cw_rate:
-            usd += (cwrite * cw_rate) / 1_000_000.0
-        # under-estimate flag: model bills cache writes but none were reported
-        partial = bool(cw_rate) and cwrite == 0
+        _ = (cw_rate, cache_write_tokens)  # intentionally unused — see above
+
+        # The estimate now runs slightly UNDER actual (~91-94%), so it is a lower
+        # bound rather than an upper one.
+        partial = False
 
         return {"credits": usd / 0.01, "usd": usd,
                 "included": False, "partial": partial}

@@ -19,6 +19,7 @@ fake executor — zero SDK, zero credits. That is the claude-shepherd AgentRunne
 one layer up.
 """
 from __future__ import annotations
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -74,6 +75,12 @@ class StateMachine:
         phase = self._phase(run.current_phase)
         self.log(f"\n=== Phase '{phase.id}' : {phase.title} ===")
 
+        # Timestamp taken BEFORE the phase runs. The review gate uses it to prove
+        # review.md was actually (re)written by THIS attempt — see the stale-verdict
+        # guard below. Sub-second resolution matters on fast reruns, so subtract a
+        # small epsilon to tolerate coarse filesystem mtime granularity.
+        _phase_started = time.time() - 1.0
+
         code = self.executor.run_phase(phase, run)
         self.log(f"--> exit {int(code)} ({label(code)})")
 
@@ -120,7 +127,39 @@ class StateMachine:
                 from review import parse_review
                 from config import HarnessConfig as _HC
                 cfg = _HC.load(self.harness_dir)
-                rv = parse_review(self.repo_root / ".harness" / "review.md")
+                rv = parse_review(self.repo_root / ".harness" / "review.md",
+                                  written_after=_phase_started)
+
+                # STALE VERDICT => the reviewer produced NOTHING this attempt and
+                # the file on disk is a leftover. Looping back would re-feed an
+                # already-fixed issue and burn the retry cap for nothing (exactly
+                # what happened in run 29181773991). This is a harness/permission
+                # fault, so halt at once and name it — do NOT spend a retry.
+                if rv.stale:
+                    self.log("  ! CODE REVIEW GATE: STALE VERDICT — review.md was not "
+                             "written during this attempt.")
+                    halt_msg = (
+                        "\n  ============ CODE REVIEW GATE: HALTED (STALE VERDICT) ============\n"
+                        "  The reviewer did NOT write a verdict on this attempt; the\n"
+                        "  review.md on disk is left over from an earlier attempt.\n"
+                        "  This is a HARNESS/PERMISSION failure, not a code defect —\n"
+                        "  the stale verdict was NOT used, and no retry was consumed.\n"
+                        f"  Reviewer file      : {rv.scanned_file}\n"
+                        "  Likely cause       : the reviewer could not write its output\n"
+                        "                       file (e.g. read permission on its own\n"
+                        "                       artifact was denied — create/edit must\n"
+                        "                       read the target before writing it), so it\n"
+                        "                       emitted the verdict to chat instead.\n"
+                        "  Recommendation     : inspect the phase's permission decisions in\n"
+                        "                       the log above ('read denied' lines), then\n"
+                        "                       re-run. The change has NOT advanced.\n"
+                        "  ==================================================================\n"
+                    )
+                    self.log(halt_msg)
+                    run.last_feedback = halt_msg
+                    run.status = "halted"
+                    run.save(self.harness_dir)
+                    return run
 
                 if rv.passed:
                     self.log("  [harness] code review gate: PASS")
