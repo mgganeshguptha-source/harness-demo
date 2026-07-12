@@ -737,14 +737,38 @@ class SdkAgentRunner:
                 )
             if kind == "read" and push_mode:
                 # PUSH MODE (code_review / unit_testing): everything in scope is
-                # already inline in the prompt. Denying reads makes the phase
-                # reproducible and stops the exploratory token burn.
-                target = getattr(request, "file_name", "") or ""
+                # already inline in the prompt, so exploratory reads are denied.
+                #
+                # CRITICAL EXEMPTION: the phase's OWN OUTPUT FILE must stay
+                # readable. The SDK's create/edit tools READ the target before
+                # writing it — so a blanket read-deny silently makes the phase
+                # unable to write its own artifact. Observed in run 29181773991:
+                # the reviewer PASSED the code on attempts 2 and 3, could not
+                # write review.md, fell back to shell (denied), and emitted the
+                # verdict to chat instead. The harness then re-parsed the STALE
+                # review.md from attempt 1 and looped until the retry cap blew.
+                #
+                # Rule: if the phase is allowed to WRITE a path, it may READ it.
+                target = (getattr(request, "file_name", "")
+                          or getattr(request, "path", "")
+                          or getattr(request, "file_path", "")
+                          or "")
+                if target and is_write_allowed(target, phase.allowed_writes,
+                                               repo_root=str(repo_root)):
+                    self.log(f"  . read approved (own output file): {target}")
+                    return PermissionDecisionApproveOnce()
+                # Unknown/blank path: approve rather than risk strangling the write.
+                # Fail OPEN here — a stray read costs tokens; a blocked write costs
+                # the whole phase.
+                if not target:
+                    self.log("  . read approved (path not reported by SDK — failing open)")
+                    return PermissionDecisionApproveOnce()
                 self.log(f"  ! read denied (push-mode {phase.id}): {target}")
                 return PermissionDecisionReject(
                     feedback="All material for this phase (code, plan, existing tests, "
                              "file listings) is already inlined in your prompt. Do not "
-                             "read files. Produce your output file now."
+                             "read source files. You MAY read and write your own output "
+                             "file. Produce your output file now."
                 )
             # read / url / memory / etc -> approve for the PoC (tighten later)
             self.log(f"  . {kind} request -> approved")
