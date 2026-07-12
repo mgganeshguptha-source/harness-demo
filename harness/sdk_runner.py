@@ -607,6 +607,29 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
             f"Do NOT modify application code under {src_main}/. Tests only."
         )
 
+    # coding prompt: state the APPROVED file list explicitly. The scope gate will
+    # halt the phase if it creates production files the plan never listed, so it is
+    # only fair (and far cheaper) to tell it the boundary up front rather than catch
+    # it afterwards. In run 29182275947 the coding phase, given only "BUILD FAILURE",
+    # invented a whole second Owner/Pet class hierarchy to route around the error.
+    _approved_block = ""
+    try:
+        from execution_record import _approved_paths_from_plan
+        _pf = repo_root / ".harness" / "prompt-steps.md"
+        if _pf.is_file():
+            _ap = sorted(_approved_paths_from_plan(_pf.read_text(encoding="utf-8")))
+            if _ap:
+                _approved_block = (
+                    "\nThe approved plan authorises changes to EXACTLY these files:\n"
+                    + "\n".join(f"  - {p}" for p in _ap)
+                    + "\nDo NOT create new production classes that are not on this list. "
+                      "If the build fails, fix the files on this list — do NOT invent new "
+                      "classes to route around the failure. If the change genuinely cannot "
+                      "be made within this scope, say so explicitly instead of expanding it.\n"
+                )
+    except Exception:
+        pass
+
     base = {
         "context": (
             f"You are running in NON-INTERACTIVE / CI mode. Do NOT ask any questions "
@@ -642,6 +665,7 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
         "coding": (
             f"Implement the change described in {plan_file} for:\n  STORY: {story}\n"
             f"Edit ONLY application source under {src_main}/. Do NOT create or edit any test files."
+            f"{_approved_block}"
         ),
         "code_review": code_review_task,
         "unit_testing": unit_testing_task,

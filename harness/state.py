@@ -36,6 +36,9 @@ class RunState:
     # how many times the code-review gate has failed and looped back to coding
     # (independent budget from validation and coverage retries).
     review_attempts: int = 0
+    # how many times the coding phase created production files the plan never
+    # approved (scope gate). Bounded, then halt for a human.
+    scope_attempts: int = 0
     # cumulative token usage across all phases (for credit estimation)
     total_tokens: dict = field(default_factory=dict)
     # per-phase token usage + the model used, in execution order, for the

@@ -103,6 +103,101 @@ def append_execution_record(plan_file: Path, repo_root: Path,
             "scope_additions": additions}
 
 
+# --- SCOPE GATE ---------------------------------------------------------------
+# Detection of scope additions already existed, but it was purely ADVISORY: the
+# harness logged "⚠ SCOPE ADDITION recorded (review at gate)" and then carried on.
+# In run 29182275947 the coding phase, told only "BUILD FAILURE", responded by
+# INVENTING a parallel class hierarchy — creating
+#     src/main/java/.../model/Owner.java   (a second Owner!)
+#     src/main/java/.../model/Pet.java
+# neither of which the story or plan ever asked for. Everything downstream then
+# reasoned over two contradictory Owner classes: the reviewer flip-flopped, the
+# coding agent reported "found BOTH Owner implementations", and the run halted in
+# confusion. The warning fired and nothing stopped it.
+#
+# The gate below is deliberately NARROW. A scope addition is not automatically
+# wrong — a real fix sometimes needs a helper the planner did not foresee, and
+# halting on every unplanned edit would be brittle and infuriating. What is almost
+# never legitimate is a coding phase CREATING A NEW PRODUCTION CLASS that the plan
+# never approved. So we split them:
+#
+#   - MODIFIED an unplanned existing file  -> warn, allow (as before)
+#   - CREATED  a new unplanned prod. file  -> SCOPE_VIOLATION, halt
+#
+# "Created" is decided against the filesystem state captured BEFORE the phase ran,
+# so it is a fact, not a guess.
+
+def classify_scope_additions(additions: list, pre_existing: set,
+                             source_roots: tuple = ("src/main/",)) -> dict:
+    """Split scope additions into created-new vs modified-existing.
+
+    `additions`     : repo-relative paths touched but absent from the approved plan.
+    `pre_existing`  : repo-relative paths that existed on disk BEFORE the phase ran.
+    `source_roots`  : only paths under these prefixes count as production code.
+
+    Returns {"created": [...], "modified": [...]}. Only `created` is a violation.
+    """
+    created, modified = [], []
+    for a in additions:
+        n = _norm(a)
+        if not any(n.startswith(r) for r in source_roots):
+            continue                      # not production source -> not our concern
+        if n in pre_existing:
+            modified.append(n)            # unplanned edit to an existing file: warn
+        else:
+            created.append(n)             # brand-new unplanned production file: HALT
+    return {"created": sorted(created), "modified": sorted(modified)}
+
+
+def snapshot_source_files(repo_root: Path,
+                          source_roots: tuple = ("src/main/",)) -> set:
+    """Repo-relative paths of production source files that exist RIGHT NOW.
+    Captured before a phase runs so we can tell 'created' from 'modified'."""
+    seen = set()
+    for root in source_roots:
+        base = repo_root / root
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if p.is_file():
+                seen.add(_norm(str(p.relative_to(repo_root))))
+    return seen
+
+
+def find_duplicate_classes(repo_root: Path, of_interest: list,
+                           source_roots: tuple = ("src/main/",)) -> dict:
+    """Detect the SAME class name existing at more than one path.
+
+    The scope gate above only catches coding writing files the PLAN did not
+    authorise. It is blind to the other half of the failure: a bad PLAN that
+    authorises the wrong path in the first place. Both produce the same poisonous
+    symptom — two classes with the same name (e.g. `owner/Owner.java` AND
+    `model/Owner.java`) — after which the reviewer and the test author reason over
+    contradictory versions of the same type and the run dissolves into confusion.
+
+    So we check the symptom directly, not just one of its causes.
+
+    `of_interest`: repo-relative paths the phase touched. We only flag duplicates
+    involving a class this phase actually wrote — pre-existing duplicates in a repo
+    are the repo's business, not ours.
+
+    Returns {class_name: [path, path, ...]} for duplicated names only.
+    """
+    by_name: dict = {}
+    for root in source_roots:
+        base = repo_root / root
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*.java"):
+            if p.is_file():
+                by_name.setdefault(p.stem, []).append(
+                    _norm(str(p.relative_to(repo_root))))
+
+    touched_names = {Path(_norm(t)).stem for t in of_interest}
+    return {name: sorted(paths) for name, paths in by_name.items()
+            if len(paths) > 1 and name in touched_names}
+
+
 def stamp_approval(plan_file: Path, approved: bool, feedback: str = "") -> None:
     """Update the latest EXECUTION RECORD's review status with the human decision."""
     if not plan_file.exists():

@@ -21,6 +21,7 @@ class ExitCode(IntEnum):
     ITERATION_CAP = 13       # phase exceeded its turn budget (credit guard)
     VALIDATION_FAILED = 14   # mvn test (or other gate) did not pass
     NEEDS_CLARIFICATION = 15  # context has unresolved [NEEDS CLARIFICATION] markers
+    SCOPE_VIOLATION = 16     # created NEW production files that the plan never approved
 
     # --- errors ---
     ARTIFACT_MISSING = 20  # required output file/section not produced
@@ -37,6 +38,7 @@ LABELS = {
     ExitCode.ITERATION_CAP: "ITERATION_CAP",
     ExitCode.VALIDATION_FAILED: "VALIDATION_FAILED",
     ExitCode.NEEDS_CLARIFICATION: "NEEDS_CLARIFICATION",
+    ExitCode.SCOPE_VIOLATION: "SCOPE_VIOLATION",
     ExitCode.ARTIFACT_MISSING: "ARTIFACT_MISSING",
     ExitCode.SDK_ERROR: "SDK_ERROR",
     ExitCode.CONFIG_ERROR: "CONFIG_ERROR",

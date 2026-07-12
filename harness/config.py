@@ -157,6 +157,13 @@ class HarnessConfig:
     # Max review-driven retries before halting for a human (independent budget).
     max_review_retries: int = 2
 
+    # --- SCOPE GATE ---
+    # How many times the coding phase may be sent back for CREATING production
+    # files the approved plan never listed, before halting for a human. Unplanned
+    # EDITS to existing files are only warned about; only new-file creation trips
+    # this gate.
+    max_scope_retries: int = 2
+
     @classmethod
     def load(cls, harness_dir: Path) -> "HarnessConfig":
         p = harness_dir / "config.yaml"
@@ -193,6 +200,7 @@ class HarnessConfig:
             review_model=data.get("review_model", cls.review_model),
             review_loopback_phase=data.get("review_loopback_phase", cls.review_loopback_phase),
             max_review_retries=int(data.get("max_review_retries", cls.max_review_retries)),
+            max_scope_retries=int(data.get("max_scope_retries", cls.max_scope_retries)),
         )
 
     def model_for_phase(self, phase_id: str) -> str:

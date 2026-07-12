@@ -84,6 +84,50 @@ class StateMachine:
         code = self.executor.run_phase(phase, run)
         self.log(f"--> exit {int(code)} ({label(code)})")
 
+        # ---- SCOPE GATE ----
+        # The coding phase created production file(s) the approved plan never listed.
+        # Loop back with the violation as explicit feedback — told plainly, the model
+        # usually retreats to the authorised files. Bounded: if it keeps inventing
+        # classes, that is a planning problem and a human must look.
+        if code == ExitCode.SCOPE_VIOLATION:
+            from config import HarnessConfig as _HC
+            cfg = _HC.load(self.harness_dir)
+            max_scope = getattr(cfg, "max_scope_retries", 2)
+            run.scope_attempts += 1
+            if run.scope_attempts <= max_scope:
+                self.log(f"  ! SCOPE_VIOLATION — looping back to '{phase.id}' to redo the "
+                         f"change WITHIN the approved plan "
+                         f"(attempt {run.scope_attempts}/{max_scope})")
+                run.iterations[phase.id] = 0
+                run.approvals[phase.id] = "rejected"
+                run.current_phase = phase.id      # redo the SAME phase
+                run.status = "running"
+                run.save(self.harness_dir)
+                return run
+
+            halt_msg = (
+                "\n  ================ SCOPE GATE: HALTED ================\n"
+                f"  The '{phase.id}' phase created production files outside the approved\n"
+                f"  plan {run.scope_attempts - 1} time(s) in a row, even after being told not to.\n"
+                "  The harness did NOT let the unplanned files stand.\n"
+                "  Why this matters : inventing new classes to dodge a failing build\n"
+                "                     poisons every downstream phase — the reviewer and\n"
+                "                     the test author end up reasoning over two\n"
+                "                     contradictory versions of the same class.\n"
+                "  Likely root cause: the plan is wrong or incomplete for what the story\n"
+                "                     actually needs, OR the build failure has a cause the\n"
+                "                     coding model cannot see (check validation-report.txt).\n"
+                "  Recommendation   : a human should read the plan's Impacted Files block\n"
+                "                     against the real failure, then re-plan. The change\n"
+                "                     has NOT advanced.\n"
+                "  ===================================================\n"
+            )
+            self.log(halt_msg)
+            run.last_feedback = halt_msg
+            run.status = "halted"
+            run.save(self.harness_dir)
+            return run
+
         # ---- apply the transition ----
         if code in _HALTING:
             run.status = "halted"

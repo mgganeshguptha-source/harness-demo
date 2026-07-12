@@ -77,6 +77,18 @@ class PhaseExecutor:
             except Exception as e:
                 self.log(f"  [harness] could not create dir {d}: {e}")
 
+        # SCOPE GATE (part 1/2): snapshot which production source files exist
+        # BEFORE the agent runs. After the phase we compare, so "the agent CREATED
+        # this file" is a fact rather than an inference. Only needed for phases that
+        # record execution (i.e. coding).
+        _pre_existing_sources = set()
+        if getattr(phase, "record_execution", False):
+            try:
+                from execution_record import snapshot_source_files
+                _pre_existing_sources = snapshot_source_files(self.repo_root)
+            except Exception as e:
+                self.log(f"  [harness] scope snapshot failed (gate will not fire): {e}")
+
         result = self.runner.run(phase, prompt, run, self.repo_root)
 
         run.iterations[phase.id] = used + result.iterations_used
@@ -184,11 +196,75 @@ class PhaseExecutor:
                 plan_file = self.harness_dir / "prompt-steps.md"
                 summary = append_execution_record(
                     plan_file, self.repo_root, result.attempted_writes, phase.id)
+
+                # SCOPE GATE (part 2/2): the detection above used to be advisory —
+                # it warned and let the run continue. That is how a coding phase was
+                # able to invent a whole second Owner/Pet class hierarchy nobody
+                # asked for (run 29182275947), poisoning every downstream phase.
+                #
+                # Split the additions: an unplanned EDIT to an existing file is a
+                # warning (a real fix may legitimately need it); CREATING a new
+                # production class the plan never approved is a hard violation.
                 if summary["scope_additions"]:
-                    self.log("  [harness] ⚠ SCOPE ADDITION recorded (review at gate): "
-                             + ", ".join(summary["scope_additions"]))
+                    from execution_record import classify_scope_additions
+                    split = classify_scope_additions(
+                        summary["scope_additions"], _pre_existing_sources)
+
+                    if split["modified"]:
+                        self.log("  [harness] ⚠ SCOPE ADDITION (unplanned edit to an "
+                                 "EXISTING file — allowed, review at gate): "
+                                 + ", ".join(split["modified"]))
+
+                    if split["created"]:
+                        self.log("  ! SCOPE VIOLATION — the phase CREATED production "
+                                 "file(s) that the approved plan never listed:")
+                        for c in split["created"]:
+                            self.log(f"      + {c}   (NEW FILE, not in plan)")
+                        self.log("  [harness] approved plan listed: "
+                                 + (", ".join(summary["approved"]) or "(none parsed)"))
+                        run.last_feedback = (
+                            "SCOPE VIOLATION. You created production source files that "
+                            "the approved plan never authorised:\n"
+                            + "\n".join(f"  - {c}" for c in split["created"])
+                            + "\n\nThe approved plan authorises ONLY:\n"
+                            + "\n".join(f"  - {a}" for a in summary["approved"])
+                            + "\n\nDo NOT invent new classes to work around a failing "
+                              "build. If the build fails, fix the AUTHORISED files. If "
+                              "the change genuinely cannot be made within the approved "
+                              "scope, say so — do not expand the scope silently."
+                        )
+                        return ExitCode.SCOPE_VIOLATION
                 else:
                     self.log("  [harness] execution record appended (scope matches plan)")
+
+                # SECOND CHECK — duplicate classes. The plan-diff above is blind to a
+                # BAD PLAN (if prompt_steps authorised model/Owner.java, creating it is
+                # "in scope" by definition). But the poisonous SYMPTOM is the same
+                # either way: two classes with the same name at different paths, after
+                # which the reviewer and test author reason over contradictory versions
+                # of the same type. Check the symptom, not just one of its causes.
+                from execution_record import find_duplicate_classes, _rel_to_repo as _r
+                touched = [_r(w, self.repo_root) for w in result.attempted_writes]
+                dupes = find_duplicate_classes(self.repo_root, touched)
+                if dupes:
+                    self.log("  ! SCOPE VIOLATION — DUPLICATE CLASS(ES): the same class "
+                             "name now exists at more than one path:")
+                    for name, paths in dupes.items():
+                        self.log(f"      {name}:")
+                        for p in paths:
+                            self.log(f"        - {p}")
+                    run.last_feedback = (
+                        "SCOPE VIOLATION — you have created DUPLICATE CLASSES. The same "
+                        "class name now exists at more than one path:\n"
+                        + "\n".join(f"  {n}:\n" + "\n".join(f"    - {p}" for p in ps)
+                                    for n, ps in dupes.items())
+                        + "\n\nThis is never correct. Every downstream phase (code review, "
+                          "unit testing) will reason over contradictory versions of the same "
+                          "type. Delete the duplicate you introduced and make the change in "
+                          "the ONE class that already existed. Do not create a parallel class "
+                          "hierarchy to work around a build failure."
+                    )
+                    return ExitCode.SCOPE_VIOLATION
             except Exception as e:
                 self.log(f"  [harness] execution record error: {e}")
 
