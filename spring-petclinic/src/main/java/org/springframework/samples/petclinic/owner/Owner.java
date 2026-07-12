@@ -144,6 +144,23 @@ public class Owner extends Person {
 		return null;
 	}
 
+	/**
+	 * Return true if the owner has a pet with the given name (case-insensitive). Returns
+	 * false if name is null or empty.
+	 */
+	public boolean hasPet(String name) {
+		if (name == null || name.isEmpty()) {
+			return false;
+		}
+		for (Pet pet : getPets()) {
+			String compName = pet.getName();
+			if (compName != null && compName.equalsIgnoreCase(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	@Override
 	public String toString() {
 		return new ToStringCreator(this).append("id", this.getId())
