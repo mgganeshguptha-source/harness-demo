@@ -33,13 +33,19 @@ EXPECTED_ARTIFACT = {
 
 
 def main(repo_root: str) -> None:
-    summaries = sorted(glob.glob(os.path.join(repo_root, "audit", "*", "run-summary.json")))
+    # Audit trails now live at audit/<feature>/<run_id>/run-summary.json (a
+    # per-run subfolder so re-runs don't overwrite). Match that depth first;
+    # fall back to the older flat audit/<feature>/ layout for legacy trails.
+    summaries = sorted(glob.glob(os.path.join(repo_root, "audit", "*", "*", "run-summary.json")))
+    if not summaries:
+        summaries = sorted(glob.glob(os.path.join(repo_root, "audit", "*", "run-summary.json")))
     if not summaries:
         print("- No run-summary.json was produced — the run failed before any "
               "phase completed, so no audit trail is available.")
         return
 
-    path = summaries[-1]
+    # newest run wins (mtime), so the summary reflects the run just committed
+    path = max(summaries, key=os.path.getmtime)
     adir = os.path.dirname(path)
     try:
         s = json.load(open(path, encoding="utf-8"))
@@ -52,6 +58,8 @@ def main(repo_root: str) -> None:
     files = sorted(os.listdir(adir)) if os.path.isdir(adir) else []
 
     print(f"- **Feature:** {s.get('feature')}")
+    if s.get("run_id"):
+        print(f"- **Run:** `{s.get('run_id')}`")
     print(f"- **Status:** `{s.get('status')}`")
     print(f"- **Phases completed:** {', '.join(done) if done else '(none)'}")
     print(f"- **Phases NOT reached:** "

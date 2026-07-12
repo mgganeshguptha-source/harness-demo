@@ -409,8 +409,60 @@ def _build_review_dossier(repo_root: Path, log=print) -> str | None:
     return dossier
 
 
+def _build_unittest_dossier(repo_root: Path, log=print) -> str | None:
+    """Inline the production code under test + plan for the unit_testing phase.
+
+    Backlog #6: unit_testing was ~223K tokens because the agent, given only the
+    story, explored the repo to locate the class/method under test. Handing it
+    the changed production source (full current content) + the plan up front
+    removes that discovery cost. Unlike the review phase we do NOT disable reads
+    here — writing good tests legitimately needs existing test fixtures, base
+    test classes, and test utilities the agent may not know about. This is a
+    context improvement to cut exploration, not a lockdown."""
+    tracked = [ln.strip() for ln in _run_git(
+        repo_root, "diff", "HEAD", "--name-only", "--", "src/main"
+    ).splitlines() if ln.strip()]
+    untracked = [ln.strip() for ln in _run_git(
+        repo_root, "ls-files", "--others", "--exclude-standard", "--", "src/main"
+    ).splitlines() if ln.strip()]
+    changed = list(dict.fromkeys(tracked + untracked))
+    if not changed:
+        return None
+
+    parts: list[str] = []
+    for rel in changed:
+        p = repo_root / rel
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if len(text) > _DOSSIER_FILE_CAP:
+            text = text[:_DOSSIER_FILE_CAP] + "\n... [TRUNCATED by harness — file cap reached]"
+        parts.append(f"--- PRODUCTION CODE UNDER TEST (full current content): {rel} ---\n{text}")
+
+    plan = repo_root / ".harness" / "prompt-steps.md"
+    if plan.is_file():
+        try:
+            parts.append(
+                "--- IMPLEMENTATION PLAN: .harness/prompt-steps.md ---\n"
+                + plan.read_text(encoding="utf-8")
+            )
+        except Exception:
+            pass
+
+    if not parts:
+        return None
+    dossier = "\n\n".join(parts)
+    if len(dossier) > _DOSSIER_TOTAL_CAP:
+        dossier = dossier[:_DOSSIER_TOTAL_CAP] + "\n... [TRUNCATED by harness — dossier cap reached]"
+    log(f"  [unit_testing] context dossier: {len(changed)} file(s) under test, "
+        f"{len(dossier)} chars inlined")
+    return dossier
+
+
 def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
-                       review_dossier: str | None = None) -> str:
+                       review_dossier: str | None = None,
+                       unittest_dossier: str | None = None) -> str:
     """The per-phase task prompt. Phase-specific, story-aware, feedback-aware.
 
     All output paths are given as ABSOLUTE paths derived from repo_root. In a
@@ -482,6 +534,25 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
             f"{_review_rules}"
         )
 
+    if unittest_dossier is not None:
+        unit_testing_task = (
+            f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
+            f"Do NOT modify application code under {src_main}/. Tests only.\n"
+            f"The production code under test and the implementation plan are provided "
+            f"INLINE below — use them to target your tests precisely; you do not need "
+            f"to search for the class or method under test. You MAY still read existing "
+            f"test files, base test classes, and test fixtures under {src_test}/ if you "
+            f"need them.\n\n"
+            f"================ CODE UNDER TEST (inlined by harness) ================\n\n"
+            f"{unittest_dossier}\n\n"
+            f"================ END CODE UNDER TEST ================\n"
+        )
+    else:
+        unit_testing_task = (
+            f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
+            f"Do NOT modify application code under {src_main}/. Tests only."
+        )
+
     base = {
         "context": (
             f"You are running in NON-INTERACTIVE / CI mode. Do NOT ask any questions "
@@ -519,10 +590,7 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
             f"Edit ONLY application source under {src_main}/. Do NOT create or edit any test files."
         ),
         "code_review": code_review_task,
-        "unit_testing": (
-            f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
-            f"Do NOT modify application code under {src_main}/. Tests only."
-        ),
+        "unit_testing": unit_testing_task,
         "documentation": (
             f"Document the change as a markdown file under {docs_dir}/ (the directory "
             f"ALREADY EXISTS, do not mkdir, shell is disallowed) for:\n  STORY: {story}\n"
@@ -578,6 +646,13 @@ class SdkAgentRunner:
                          "legacy pull-mode review (reads allowed)")
         review_push_mode = review_dossier is not None
 
+        # #6: unit_testing context dossier — inline the changed production code +
+        # plan so the test author doesn't burn tokens rediscovering the class
+        # under test (~223K observed). Reads stay enabled (tests need fixtures).
+        unittest_dossier: str | None = None
+        if phase.id == "unit_testing":
+            unittest_dossier = _build_unittest_dossier(repo_root, log=self.log)
+
         # ---- THE INTERLOCK (real-time, at the SDK) ----
         def on_permission_request(request, invocation):
             # NOTE: request.kind is a plain string (ClassVar), NOT an enum.
@@ -616,7 +691,9 @@ class SdkAgentRunner:
 
         # Build the prompt: capability layer (skills/instructions) + phase task.
         capability, cap_manifest = _load_capability_layer(repo_root, phase)
-        task = _phase_instruction(phase, run, repo_root, review_dossier=review_dossier)
+        task = _phase_instruction(phase, run, repo_root,
+                                  review_dossier=review_dossier,
+                                  unittest_dossier=unittest_dossier)
         full_prompt = (capability + "\n\n" if capability else "") + task
 
         # ---- CAPABILITY MANIFEST: log + persist the proof of injection ----
