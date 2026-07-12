@@ -410,15 +410,22 @@ def _build_review_dossier(repo_root: Path, log=print) -> str | None:
 
 
 def _build_unittest_dossier(repo_root: Path, log=print) -> str | None:
-    """Inline the production code under test + plan for the unit_testing phase.
+    """Inline EVERYTHING the test author needs, so it never explores the repo.
 
-    Backlog #6: unit_testing was ~223K tokens because the agent, given only the
-    story, explored the repo to locate the class/method under test. Handing it
-    the changed production source (full current content) + the plan up front
-    removes that discovery cost. Unlike the review phase we do NOT disable reads
-    here — writing good tests legitimately needs existing test fixtures, base
-    test classes, and test utilities the agent may not know about. This is a
-    context improvement to cut exploration, not a lockdown."""
+    Backlog #6: unit_testing was ~223K tokens because, given only the story, the
+    agent hunted for the class under test AND for existing test conventions.
+    First attempt at this inlined only the changed production source and left
+    reads enabled with a 'you MAY still read test files' note — the agent took
+    the invitation (6 reads + grep) and tokens barely moved (~2%).
+
+    So we now push the three things it was actually looking for:
+      1. the changed production source (full current content),
+      2. the implementation plan,
+      3. EXISTING TEST FILES for the same class/package (conventions, fixtures,
+         base classes) + a listing of the test tree so it knows what exists.
+    With all of that inline there is no legitimate reason to read, and the
+    caller denies reads for this phase (see on_permission_request).
+    """
     tracked = [ln.strip() for ln in _run_git(
         repo_root, "diff", "HEAD", "--name-only", "--", "src/main"
     ).splitlines() if ln.strip()]
@@ -450,13 +457,59 @@ def _build_unittest_dossier(repo_root: Path, log=print) -> str | None:
         except Exception:
             pass
 
+    # --- existing tests for the SAME package: conventions + fixtures + base classes.
+    # This is what the agent was grepping/reading for. Push it instead.
+    test_root = repo_root / "src" / "test"
+    if test_root.is_dir():
+        # packages touched by the change, e.g. .../petclinic/owner
+        pkg_dirs: list[Path] = []
+        for rel in changed:
+            pkg = Path(rel).parent                       # src/main/java/<pkg...>
+            rest = pkg.parts[3:] if len(pkg.parts) > 3 else ()  # strip src/main/java
+            cand = test_root / "java" / Path(*rest) if rest else None
+            if cand and cand.is_dir() and cand not in pkg_dirs:
+                pkg_dirs.append(cand)
+
+        sibling_tests: list[Path] = []
+        for d in pkg_dirs:
+            for f in sorted(d.glob("*.java")):
+                if f not in sibling_tests:
+                    sibling_tests.append(f)
+
+        budget = 6  # cap: enough to convey conventions, not the whole suite
+        for f in sibling_tests[:budget]:
+            try:
+                text = f.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if len(text) > _DOSSIER_FILE_CAP:
+                text = text[:_DOSSIER_FILE_CAP] + "\n... [TRUNCATED by harness — file cap reached]"
+            rel_f = f.relative_to(repo_root).as_posix()
+            parts.append(
+                f"--- EXISTING TEST IN THE SAME PACKAGE (follow these conventions): {rel_f} ---\n{text}"
+            )
+
+        # full listing of the test tree so the agent knows what already exists
+        all_tests = sorted(
+            p.relative_to(repo_root).as_posix()
+            for p in test_root.rglob("*.java")
+        )
+        if all_tests:
+            shown = all_tests[:200]
+            listing = "\n".join(shown)
+            if len(all_tests) > len(shown):
+                listing += f"\n... (+{len(all_tests) - len(shown)} more)"
+            parts.append(
+                "--- EXISTING TEST FILES (full listing of src/test) ---\n" + listing
+            )
+
     if not parts:
         return None
     dossier = "\n\n".join(parts)
     if len(dossier) > _DOSSIER_TOTAL_CAP:
         dossier = dossier[:_DOSSIER_TOTAL_CAP] + "\n... [TRUNCATED by harness — dossier cap reached]"
     log(f"  [unit_testing] context dossier: {len(changed)} file(s) under test, "
-        f"{len(dossier)} chars inlined")
+        f"{len(dossier)} chars inlined (incl. sibling tests + test-tree listing)")
     return dossier
 
 
@@ -538,14 +591,15 @@ def _phase_instruction(phase: Phase, run: RunState, repo_root: Path,
         unit_testing_task = (
             f"Write unit tests under {src_test}/ that verify:\n  STORY: {story}\n"
             f"Do NOT modify application code under {src_main}/. Tests only.\n"
-            f"The production code under test and the implementation plan are provided "
-            f"INLINE below — use them to target your tests precisely; you do not need "
-            f"to search for the class or method under test. You MAY still read existing "
-            f"test files, base test classes, and test fixtures under {src_test}/ if you "
-            f"need them.\n\n"
-            f"================ CODE UNDER TEST (inlined by harness) ================\n\n"
+            f"EVERYTHING you need is provided INLINE below: the production code under "
+            f"test, the implementation plan, existing tests in the same package (follow "
+            f"their conventions, imports, and fixtures), and a listing of the whole test "
+            f"tree. Do NOT read, open, list, glob, or search any file — file-read access "
+            f"is DISABLED for this phase and any read attempt will be denied. Do not ask "
+            f"for more files; nothing else is in scope. Write the test file immediately.\n\n"
+            f"================ TEST CONTEXT (inlined by harness) ================\n\n"
             f"{unittest_dossier}\n\n"
-            f"================ END CODE UNDER TEST ================\n"
+            f"================ END TEST CONTEXT ================\n"
         )
     else:
         unit_testing_task = (
@@ -652,6 +706,13 @@ class SdkAgentRunner:
         unittest_dossier: str | None = None
         if phase.id == "unit_testing":
             unittest_dossier = _build_unittest_dossier(repo_root, log=self.log)
+            if unittest_dossier is None:
+                self.log("  [unit_testing] dossier unavailable — falling back to "
+                         "story-only prompt (reads allowed)")
+        unittest_push_mode = unittest_dossier is not None
+        # Reads are denied whenever a phase runs in push mode: everything in scope
+        # is already inline, so a read is exploration we are paying for twice.
+        push_mode = review_push_mode or unittest_push_mode
 
         # ---- THE INTERLOCK (real-time, at the SDK) ----
         def on_permission_request(request, invocation):
@@ -674,16 +735,16 @@ class SdkAgentRunner:
                 return PermissionDecisionReject(
                     feedback="Shell commands are not permitted in this phase."
                 )
-            if kind == "read" and review_push_mode:
-                # PUSH-MODE REVIEW: everything in scope is already inline in the
-                # prompt. Denying reads makes the review reproducible and stops
-                # the exploratory token burn (16 turns / 557K tokens observed).
+            if kind == "read" and push_mode:
+                # PUSH MODE (code_review / unit_testing): everything in scope is
+                # already inline in the prompt. Denying reads makes the phase
+                # reproducible and stops the exploratory token burn.
                 target = getattr(request, "file_name", "") or ""
-                self.log(f"  ! read denied (push-mode review): {target}")
+                self.log(f"  ! read denied (push-mode {phase.id}): {target}")
                 return PermissionDecisionReject(
-                    feedback="All review material (diff, full changed files, plan) is "
-                             "already inlined in your prompt. Do not read files. "
-                             "Write your verdict to .harness/review.md now."
+                    feedback="All material for this phase (code, plan, existing tests, "
+                             "file listings) is already inlined in your prompt. Do not "
+                             "read files. Produce your output file now."
                 )
             # read / url / memory / etc -> approve for the PoC (tighten later)
             self.log(f"  . {kind} request -> approved")

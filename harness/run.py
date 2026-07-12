@@ -178,6 +178,27 @@ def cmd_collect_audit(args):
         "completed_phases": run.completed_phases,
         "total_tokens": run.total_tokens,
         "phase_token_log": run.phase_token_log,
+        # The cost figures in phase_token_log are ESTIMATES. Ship the caveat with
+        # the data so nobody downstream reads them as a bill.
+        "cost_estimate_disclaimer": {
+            "is_estimate": True,
+            "basis": "per-token pricing from GitHub's published usage-based rates; "
+                     "1 AI credit = $0.01. No model is free under usage-based "
+                     "billing (incl. gpt-5-mini).",
+            "known_divergences": [
+                "cache-write tokens not reported by the SDK (Anthropic models) — "
+                "flagged per-phase as 'partial'",
+                "any token class the SDK omits or under-reports",
+                "published rates may have changed since this config was updated",
+                "phases whose model has no configured rate are excluded from totals",
+            ],
+            "direction": "estimate is a LOWER BOUND; actual charge is typically higher",
+            "authoritative_source": "GitHub Billing — AI-credit balance delta "
+                                    "before/after the run "
+                                    "(github.com/settings/copilot/features)",
+            "rates_reference": "https://docs.github.com/en/copilot/reference/"
+                               "copilot-billing/models-and-pricing",
+        },
     }
     (audit_dir / "run-summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     copied.append("run-summary.json")
@@ -205,22 +226,52 @@ def _report(run: RunState):
         print("\n  token usage & estimated cost by phase:")
         total_credits = 0.0
         any_unknown = False
+        any_partial = False
         for e in run.phase_token_log:
             model = f"[{e.get('model','')}]"
-            if e.get("included"):
-                cost = "included (0 cr)"
-            elif e.get("est_credits") is not None:
+            if e.get("est_credits") is not None:
                 cost = f"~{e['est_credits']:.1f} cr (~${e['est_usd']:.4f})"
                 total_credits += e["est_credits"]
+                if e.get("partial"):
+                    cost += " *"; any_partial = True
             else:
                 cost = "rate unknown"; any_unknown = True
             print(f"    {e['phase']:<14}{model:<22} "
                   f"{e['phase_tokens']:>7} tok   {cost}")
-        approx = "≈" if not any_unknown else "≳"
+        approx = "≈" if not (any_unknown or any_partial) else "≳"
         print(f"\n  estimated run cost: {approx} {total_credits:.1f} AI credits "
               f"(≈ ${total_credits * 0.01:.4f})   [1 credit = $0.01]")
-        print(f"  NOTE: estimate only — included models cost 0; confirm the actual")
-        print(f"        charge via GitHub Billing (before/after credit delta).")
+        if any_partial:
+            print(f"  * partial: this model bills cache-WRITE tokens, but none were")
+            print(f"    reported by the SDK for that phase — its real charge is HIGHER.")
+        if any_unknown:
+            print(f"  ! one or more models have no published rate in config; those")
+            print(f"    phases are EXCLUDED from the total above.")
+
+        # ---------------- DISCLAIMER ----------------
+        # Deliberately does NOT quote an accuracy percentage. A single observed
+        # run (est 14.5 cr vs 16 cr billed) is not a general guarantee: the error
+        # depends on the model mix and on which token classes the SDK reports.
+        # State what is missing and where truth lives; let the reader compare.
+        print("\n  ---------------------------------------------------------------")
+        print("  DISCLAIMER — this is an ESTIMATE, not the billed amount.")
+        print("  Priced per-token from GitHub's published usage-based rates")
+        print("  (1 credit = $0.01). Under usage-based billing NO model is free —")
+        print("  gpt-5-mini is billed too. Known sources of DIVERGENCE, all of")
+        print("  which make the real charge HIGHER than the figure above:")
+        print("    - cache-WRITE tokens the SDK does not report (Anthropic models)")
+        print("    - any token class the SDK omits or under-reports")
+        print("    - published rates changing after this config was last updated")
+        print("    - phases whose model has no rate in config (excluded entirely)")
+        print("  Treat the number as a lower-bound sanity check for spotting")
+        print("  runaway phases — NOT as a billing figure, and not for client")
+        print("  reporting. For ACTUAL usage and cost, use GitHub Billing:")
+        print("    github.com/settings/copilot/features  (personal account)")
+        print("    -> Usage / 'View details', or take the AI-credit balance")
+        print("       delta immediately before and after the run.")
+        print("  Rates: docs.github.com/en/copilot/reference/copilot-billing/"
+              "models-and-pricing")
+        print("  ---------------------------------------------------------------")
 
     # token + rough credit estimate (1 credit = $0.01; tokens priced per-model,
     # so this is an INDICATIVE total, not the billed amount — confirm in GitHub billing)
@@ -228,7 +279,9 @@ def _report(run: RunState):
     tin, tout = tk.get("input", 0), tk.get("output", 0)
     if tin or tout:
         print(f"\n  totals: input={tin} output={tout} "
-              f"cache_read={tk.get('cache_read', 0)} reasoning={tk.get('reasoning', 0)}")
+              f"cache_read={tk.get('cache_read', 0)} "
+              f"cache_write={tk.get('cache_write', 0)} "
+              f"reasoning={tk.get('reasoning', 0)}")
         print(f"          total billable tokens (in+out) = {tin + tout}")
         print(f"          (see GitHub Billing for the exact AI-credit charge)")
 
