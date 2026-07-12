@@ -146,31 +146,64 @@ jobs:
             spring-petclinic/docs/**
             spring-petclinic/audit/**
 
-      - name: Commit audit trail to repo (always — success OR halt)
+      - name: Read harness outcome
+        if: always()
+        id: outcome
+        run: |
+          cd spring-petclinic
+          # Audit trails live at audit/<feature>/<run_id>/run-summary.json — note
+          # the RUN-ID subfolder (added so re-runs don't overwrite each other).
+          # The old one-level glob silently matched a stale flat-layout summary and
+          # reported the WRONG status (e.g. needs_input on a clean run).
+          STATUS=$(python3 -c "import json,glob,os; \
+            f=glob.glob('audit/*/*/run-summary.json') or glob.glob('audit/*/run-summary.json'); \
+            print(json.load(open(max(f,key=os.path.getmtime)))['status'] if f else 'unknown')" \
+            2>/dev/null || echo unknown)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          # Binary split: 'done' is the only outcome that yields a reviewable branch.
+          if [ "$STATUS" = "done" ]; then
+            echo "prefix=harness" >> "$GITHUB_OUTPUT"
+            echo "completed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prefix=harness-halted" >> "$GITHUB_OUTPUT"
+            echo "completed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Harness status: $STATUS"
+
+      - name: Commit run to a single branch (always — success OR halt)
         if: always()
         env:
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           cd spring-petclinic
           FEATURE="${{ github.event.inputs.feature_id }}"
-          # A dedicated audit branch per run, so the trail is ALWAYS retained in
-          # the repo regardless of whether the harness completed or halted.
-          AUDIT_BRANCH="harness-audit/${FEATURE}-${{ github.run_id }}"
+          STATUS="${{ steps.outcome.outputs.status }}"
+          # ONE branch per run. Prefix encodes the outcome so a halted run can never
+          # be mistaken for reviewable work:
+          #   harness/<feature>-<run_id>          -> completed  (PR raised below)
+          #   harness-halted/<feature>-<run_id>   -> halted     (pushed, NO PR)
+          # Pushed unconditionally, so the audit trail is retained even when the
+          # harness stops early. (Teams that don't want audit/ in the repo can
+          # .gitignore it — the uploaded workflow artifact still has it.)
+          BRANCH="${{ steps.outcome.outputs.prefix }}/${FEATURE}-${{ github.run_id }}"
           git config user.name "harness-bot"
           git config user.email "harness-bot@users.noreply.github.com"
-          git checkout -b "$AUDIT_BRANCH"
-          git add audit/ 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          # real source + docs + the committed audit trail (never the gitignored
+          # .harness workspace itself). On a halt, src/ and docs/ may be partial or
+          # absent — that is the point: whatever exists is preserved.
+          git add src/ docs/ audit/ 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "No audit files to commit (collect-audit produced nothing)."
+            echo "Nothing to commit (no code, docs, or audit files produced)."
+            echo "::warning title=Empty run::No artifacts to retain for $FEATURE"
           else
-            # Read status from run-summary.json so the commit message states the
-            # outcome and which phases are missing.
-            STATUS=$(python3 -c "import json,glob,sys; \
-              f=sorted(glob.glob('audit/*/run-summary.json')); \
-              print(json.load(open(f[-1]))['status'] if f else 'unknown')" 2>/dev/null || echo unknown)
-            git commit -m "Harness audit [$FEATURE] status=$STATUS (run ${{ github.run_id }})"
-            git push origin "$AUDIT_BRANCH"
-            echo "::notice title=Audit trail retained::Branch $AUDIT_BRANCH (status=$STATUS)"
+            git commit -m "Harness: $FEATURE [status=$STATUS] (run ${{ github.run_id }})"
+            git push origin "$BRANCH"
+            if [ "${{ steps.outcome.outputs.completed }}" = "true" ]; then
+              echo "::notice title=Run retained::Branch $BRANCH (status=$STATUS)"
+            else
+              echo "::warning title=HALTED — no PR will be raised::Branch $BRANCH (status=$STATUS)"
+            fi
           fi
 
       - name: Summarize what was retained and what's missing
@@ -180,23 +213,23 @@ jobs:
           python3 harness/audit_summary.py spring-petclinic >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open pull request with the change
-        if: success()
+        # Gate on the HARNESS's own status, not just the job's exit code. A run can
+        # exit 0 while halting at a gate (e.g. needs_input) — that must NOT raise a PR.
+        if: always() && steps.outcome.outputs.completed == 'true'
         env:
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           cd spring-petclinic
           BRANCH="harness/${{ github.event.inputs.feature_id }}-${{ github.run_id }}"
-          git config user.name "harness-bot"
-          git config user.email "harness-bot@users.noreply.github.com"
-          # Return to the checked-out commit first (the audit step may have left us
-          # on the audit branch) so the code PR branches cleanly from the base.
-          git checkout "${{ github.sha }}" 2>/dev/null || git checkout main
-          git checkout -b "$BRANCH"
-          # stage real source + docs + the committed audit trail (never the
-          # gitignored .harness workspace itself)
-          git add src/ docs/ audit/ 2>/dev/null || true
-          git commit -m "Harness: ${{ github.event.inputs.feature_id }}" || echo "nothing to commit"
-          git push origin "$BRANCH"
+          # The branch was already created, committed, and pushed above — just open
+          # the PR against it. No re-checkout, no second commit.
           gh pr create --title "Harness: ${{ github.event.inputs.feature_id }}" \
             --body-file .harness/pr-body.md --base main --head "$BRANCH" || \
             echo "PR creation skipped (check pr-body.md / branch state)"
+
+      - name: Explain why no PR was raised
+        if: always() && steps.outcome.outputs.completed != 'true'
+        run: |
+          echo "::notice title=No PR::Harness status='${{ steps.outcome.outputs.status }}' — \
+          run did not complete. Work retained on branch \
+          harness-halted/${{ github.event.inputs.feature_id }}-${{ github.run_id }} for inspection."
