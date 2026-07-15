@@ -1,0 +1,389 @@
+{
+  "phases": {
+    "context": {
+      "recorded_at": "2026-07-15T08:48:18+00:00",
+      "instructions": [
+        {
+          "name": "api-design.instructions.md",
+          "path": ".github/instructions/backend/api-design.instructions.md",
+          "bytes": 6166,
+          "sha256": "19ab7e24abc85d8216e7a0e03dbd57a09d5a5d74261c2b6d6449b795187e26b8"
+        },
+        {
+          "name": "error-handling-java.instructions.md",
+          "path": ".github/instructions/backend/error-handling-java.instructions.md",
+          "bytes": 4926,
+          "sha256": "684defbae712c2c698fcf34d05dfbeca44a93efdd29941d5d0a495ecc683e8cc"
+        },
+        {
+          "name": "java-conventions.instructions.md",
+          "path": ".github/instructions/backend/java-conventions.instructions.md",
+          "bytes": 1799,
+          "sha256": "8c991df53b9ac4e1d2fae77a8c09c36842fcefaa15160b7689ca9e73addc0b3d"
+        },
+        {
+          "name": "logging-java.instructions.md",
+          "path": ".github/instructions/backend/logging-java.instructions.md",
+          "bytes": 3616,
+          "sha256": "a3b84fe833be336550249b51db1b1acfaf048ee21b86b2678866b6858bb18c05"
+        },
+        {
+          "name": "owasp-java.instructions.md",
+          "path": ".github/instructions/backend/owasp-java.instructions.md",
+          "bytes": 4932,
+          "sha256": "73eeaa15da8f4ffbc62bca285a5b8fe9d633457a0764dba23915bb0edddcae3b"
+        },
+        {
+          "name": "performance-java.instructions.md",
+          "path": ".github/instructions/backend/performance-java.instructions.md",
+          "bytes": 5598,
+          "sha256": "a922e9def197aeb1cb2392435d60ec91e9e609d3d646b600e19101ed8b0f65e9"
+        },
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [
+        {
+          "name": "SKILL.md",
+          "path": ".github/skills/analyze-service/SKILL.md",
+          "bytes": 8360,
+          "sha256": "8e55b9cb659915e6a2e991c4a337c2600f5115977da0dbdf614844b0c2f2b433",
+          "skill": "analyze-service"
+        },
+        {
+          "name": "SKILL.md",
+          "path": ".github/skills/build-context/SKILL.md",
+          "bytes": 25975,
+          "sha256": "4ff831e2374d74e18df899377b54c98adb548248b5335664c826d65abe3b3d43",
+          "skill": "build-context"
+        }
+      ],
+      "assets": [
+        {
+          "name": "analysis-template.md",
+          "path": ".github/skills/analyze-service/assets/analysis-template.md",
+          "bytes": 3656,
+          "sha256": "839b4e0eceecaab10fb17f406062fdcf0b67112dff4d7470be1447289cf0ad0c",
+          "for_skill": "analyze-service"
+        },
+        {
+          "name": "context-template.md",
+          "path": ".github/skills/build-context/assets/context-template.md",
+          "bytes": 7715,
+          "sha256": "583edb0078db7f4f9d3e1964a3998e26efcc6e914d537918f2c7a0bcb7205f9d",
+          "for_skill": "build-context"
+        }
+      ]
+    },
+    "prompt_steps": {
+      "recorded_at": "2026-07-15T08:48:59+00:00",
+      "instructions": [
+        {
+          "name": "api-design.instructions.md",
+          "path": ".github/instructions/backend/api-design.instructions.md",
+          "bytes": 6166,
+          "sha256": "19ab7e24abc85d8216e7a0e03dbd57a09d5a5d74261c2b6d6449b795187e26b8"
+        },
+        {
+          "name": "error-handling-java.instructions.md",
+          "path": ".github/instructions/backend/error-handling-java.instructions.md",
+          "bytes": 4926,
+          "sha256": "684defbae712c2c698fcf34d05dfbeca44a93efdd29941d5d0a495ecc683e8cc"
+        },
+        {
+          "name": "java-conventions.instructions.md",
+          "path": ".github/instructions/backend/java-conventions.instructions.md",
+          "bytes": 1799,
+          "sha256": "8c991df53b9ac4e1d2fae77a8c09c36842fcefaa15160b7689ca9e73addc0b3d"
+        },
+        {
+          "name": "logging-java.instructions.md",
+          "path": ".github/instructions/backend/logging-java.instructions.md",
+          "bytes": 3616,
+          "sha256": "a3b84fe833be336550249b51db1b1acfaf048ee21b86b2678866b6858bb18c05"
+        },
+        {
+          "name": "owasp-java.instructions.md",
+          "path": ".github/instructions/backend/owasp-java.instructions.md",
+          "bytes": 4932,
+          "sha256": "73eeaa15da8f4ffbc62bca285a5b8fe9d633457a0764dba23915bb0edddcae3b"
+        },
+        {
+          "name": "performance-java.instructions.md",
+          "path": ".github/instructions/backend/performance-java.instructions.md",
+          "bytes": 5598,
+          "sha256": "a922e9def197aeb1cb2392435d60ec91e9e609d3d646b600e19101ed8b0f65e9"
+        },
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [
+        {
+          "name": "SKILL.md",
+          "path": ".github/skills/build-prompt-steps/SKILL.md",
+          "bytes": 27181,
+          "sha256": "08b7047efdcf19a55608a816efea1f30030d01fa0314ef0d1d9665346cf4f3af",
+          "skill": "build-prompt-steps"
+        }
+      ],
+      "assets": []
+    },
+    "coding": {
+      "recorded_at": "2026-07-15T08:51:10+00:00",
+      "instructions": [
+        {
+          "name": "api-design.instructions.md",
+          "path": ".github/instructions/backend/api-design.instructions.md",
+          "bytes": 6166,
+          "sha256": "19ab7e24abc85d8216e7a0e03dbd57a09d5a5d74261c2b6d6449b795187e26b8"
+        },
+        {
+          "name": "error-handling-java.instructions.md",
+          "path": ".github/instructions/backend/error-handling-java.instructions.md",
+          "bytes": 4926,
+          "sha256": "684defbae712c2c698fcf34d05dfbeca44a93efdd29941d5d0a495ecc683e8cc"
+        },
+        {
+          "name": "java-conventions.instructions.md",
+          "path": ".github/instructions/backend/java-conventions.instructions.md",
+          "bytes": 1799,
+          "sha256": "8c991df53b9ac4e1d2fae77a8c09c36842fcefaa15160b7689ca9e73addc0b3d"
+        },
+        {
+          "name": "logging-java.instructions.md",
+          "path": ".github/instructions/backend/logging-java.instructions.md",
+          "bytes": 3616,
+          "sha256": "a3b84fe833be336550249b51db1b1acfaf048ee21b86b2678866b6858bb18c05"
+        },
+        {
+          "name": "owasp-java.instructions.md",
+          "path": ".github/instructions/backend/owasp-java.instructions.md",
+          "bytes": 4932,
+          "sha256": "73eeaa15da8f4ffbc62bca285a5b8fe9d633457a0764dba23915bb0edddcae3b"
+        },
+        {
+          "name": "performance-java.instructions.md",
+          "path": ".github/instructions/backend/performance-java.instructions.md",
+          "bytes": 5598,
+          "sha256": "a922e9def197aeb1cb2392435d60ec91e9e609d3d646b600e19101ed8b0f65e9"
+        },
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [
+        {
+          "name": "SKILL.md",
+          "path": ".github/skills/security-review/SKILL.md",
+          "bytes": 5526,
+          "sha256": "ee697260dc1d33729444ccbef10f59e3a576f7f6692b2d4f06c185536e7e82f3",
+          "skill": "security-review"
+        }
+      ],
+      "assets": []
+    },
+    "code_review": {
+      "recorded_at": "2026-07-15T08:51:47+00:00",
+      "instructions": [
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [
+        {
+          "name": "SKILL.md",
+          "path": ".github/skills/security-review/SKILL.md",
+          "bytes": 5526,
+          "sha256": "ee697260dc1d33729444ccbef10f59e3a576f7f6692b2d4f06c185536e7e82f3",
+          "skill": "security-review"
+        }
+      ],
+      "assets": []
+    },
+    "unit_testing": {
+      "recorded_at": "2026-07-15T08:54:58+00:00",
+      "instructions": [
+        {
+          "name": "java-testing.instructions.md",
+          "path": ".github/instructions/backend/java-testing.instructions.md",
+          "bytes": 13015,
+          "sha256": "c59ee9c3dbb3be5e540612f8f9d1ec6c99875a8f8effa23a83c05cd2d825d6c6"
+        },
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [],
+      "assets": []
+    },
+    "documentation": {
+      "recorded_at": "2026-07-15T08:56:32+00:00",
+      "instructions": [
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [],
+      "assets": []
+    },
+    "raise_pr": {
+      "recorded_at": "2026-07-15T08:56:51+00:00",
+      "instructions": [
+        {
+          "name": "copilot-output-naming.instructions.md",
+          "path": ".github/instructions/copilot-output-naming.instructions.md",
+          "bytes": 6301,
+          "sha256": "2f2c719b0b42f85f6387ebc0e904e68a12bae033ff78831d790d981f899d8b50"
+        },
+        {
+          "name": "hipaa-guardrails.instructions.md",
+          "path": ".github/instructions/hipaa-guardrails.instructions.md",
+          "bytes": 3345,
+          "sha256": "a320060dc1856b855072b1c12b23c9ca3237f5058dc78a80655d5098857eaec8"
+        },
+        {
+          "name": "logging-standards.instructions.md",
+          "path": ".github/instructions/logging-standards.instructions.md",
+          "bytes": 2794,
+          "sha256": "ce54507d0f0d95628d2085cb928eb648392528dd2cd53112f5f1ac544ac42cff"
+        },
+        {
+          "name": "prompt-injection-guardrails.instructions.md",
+          "path": ".github/instructions/prompt-injection-guardrails.instructions.md",
+          "bytes": 3869,
+          "sha256": "327ac5a63246dd037f9b7c328328f9402892c129bafc925b48f10e18d13732ff"
+        }
+      ],
+      "skills": [],
+      "assets": []
+    }
+  }
+}
