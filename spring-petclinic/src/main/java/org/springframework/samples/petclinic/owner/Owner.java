@@ -184,4 +184,26 @@ public class Owner extends Person {
 		return (fn == null ? "" : fn) + " " + (ln == null ? "" : ln);
 	}
 
+	/**
+	 * Check whether this owner has a pet with the given name (case-insensitive). Returns
+	 * false if the provided name is null or empty. This method does not modify owner or
+	 * pet state. Comparison is performed using String.equalsIgnoreCase on non-null pet
+	 * names.
+	 * @param name the pet name to look for
+	 * @return true if a pet with the given name exists for this owner
+	 */
+	public boolean hasPet(String name) {
+		// Null and empty-name are considered "no match" per acceptance criteria
+		if (name == null || name.isEmpty()) {
+			return false;
+		}
+		for (Pet pet : getPets()) {
+			String compName = pet.getName();
+			if (compName != null && compName.equalsIgnoreCase(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 }
