@@ -274,4 +274,4 @@ class HarnessConfig:
         if self.test_filter:
             # Maven Surefire targeted run
             return f"{self.test_command} -Dtest={self.test_filter}"
-        return self.test_command
+        return self.test_command    

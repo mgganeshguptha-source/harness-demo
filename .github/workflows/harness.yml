@@ -1,235 +1,25 @@
-name: Harness Engineering Demo
+# =============================================================================
+# .github/workflows/harness.yml  —  caller workflow (lives in the SERVICE repo)
+# Thin: it only pins toolchain versions and calls the shared engine workflow.
+# Everything service-specific (modules, paths, globs) is in .harness/config.yaml.
+# =============================================================================
+name: Harness
 
-# Manual trigger — click "Run workflow" in the Actions tab.
 on:
   workflow_dispatch:
     inputs:
       feature_id:
-        description: "Feature id for this run (e.g. PC-2-haspet)"
+        description: "Story / feature id to run"
         required: true
-        default: "PC-2-haspet"
-      model:
-        description: "Copilot model to use"
-        required: true
-        default: "gpt-5-mini"
-
-permissions:
-  contents: write        # commit the change + push the branch
-  pull-requests: write   # open the PR
 
 jobs:
   harness:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install Node (for Copilot CLI bundled by the SDK)
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install GitHub Copilot CLI
-        run: npm install -g @github/copilot
-
-      - name: Install harness Python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install github-copilot-sdk pyyaml
-
-      - name: Seed harness workspace config (Linux mvnw)
-        run: |
-          mkdir -p spring-petclinic/.harness
-          cat > spring-petclinic/.harness/config.yaml <<'YAML'
-          test_command: "./mvnw test"
-          test_filter: ""
-          test_timeout: 1200
-          pre_validation_command: "./mvnw spring-javaformat:apply"
-          validation_loopback_phase: "coding"
-          max_validation_retries: 3
-          min_coverage: 90
-          coverage_scope: "changed"
-          coverage_loopback_phase: "unit_testing"
-          max_coverage_retries: 2
-          coverage_command: "./mvnw jacoco:report"
-          coverage_csv: "target/site/jacoco/jacoco.csv"
-          coverage_metric: "LINE"
-          review_model: "claude-haiku-4.5"
-          review_loopback_phase: "coding"
-          max_review_retries: 2
-          story_file: "stories/current-story.md"
-          model: "${{ github.event.inputs.model }}"
-          phase_models:
-            context: "gpt-5-mini"
-            prompt_steps: "gpt-5-mini"
-            coding: "gpt-5-mini"
-            code_review: "claude-haiku-4.5"
-            unit_testing: "gpt-5-mini"
-            documentation: "gpt-5-mini"
-            raise_pr: "gpt-5-mini"
-          YAML
-          chmod +x spring-petclinic/mvnw
-
-      - name: Copilot auth smoke test
-        working-directory: harness
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          echo "token present: ${COPILOT_GITHUB_TOKEN:+yes}"
-          # Report the TOKEN TYPE without leaking it: classic (ghp_) is silently
-          # rejected by Copilot CLI; fine-grained (github_pat_) is required.
-          case "$COPILOT_GITHUB_TOKEN" in
-            ghp_*)        echo "token type: CLASSIC (ghp_) -> NOT SUPPORTED by Copilot CLI" ;;
-            github_pat_*) echo "token type: fine-grained (github_pat_) -> OK type" ;;
-            *)            echo "token type: UNKNOWN prefix" ;;
-          esac
-          copilot --version || true
-          # SDK round-trip with EXPLICIT token (the reliable CI path)
-          python - <<'PY'
-          import asyncio, os
-          from copilot import CopilotClient
-          async def main():
-              tok = (os.environ.get("COPILOT_GITHUB_TOKEN")
-                     or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
-              print("token resolved:", bool(tok), "| prefix:", (tok[:11] if tok else None))
-              try:
-                  async with CopilotClient(github_token=tok) as client:
-                      models = await client.list_models()
-                      print("models visible:", len(models))
-                      for m in models[:8]:
-                          print("  -", getattr(m, "id", m))
-              except Exception as e:
-                  print("SDK auth error:", type(e).__name__, str(e)[:250])
-          asyncio.run(main())
-          PY
-
-      - name: Run the harness (all phases, auto-approve gates)
-        working-directory: harness
-        env:
-          # CI auth: SDK detects COPILOT_GITHUB_TOKEN; the bundled CLI subprocess
-          # also checks GH_TOKEN / GITHUB_TOKEN. Set all three so whichever the
-          # child process reads, the token is there.
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          python run.py init --repo ../spring-petclinic --feature "${{ github.event.inputs.feature_id }}"
-          python run.py autorun --repo ../spring-petclinic --model "${{ github.event.inputs.model }}"
-
-      - name: Collect audit trail (always, even if halted)
-        if: always()
-        working-directory: harness
-        run: |
-          python run.py collect-audit --repo ../spring-petclinic || true
-
-      - name: Upload harness artifacts (audit trail)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: harness-workspace
-          path: |
-            spring-petclinic/.harness/**
-            spring-petclinic/.github/story-context-files/**
-            spring-petclinic/docs/**
-            spring-petclinic/audit/**
-
-      - name: Read harness outcome
-        if: always()
-        id: outcome
-        run: |
-          cd spring-petclinic
-          # Audit trails live at audit/<feature>/<run_id>/run-summary.json — note
-          # the RUN-ID subfolder (added so re-runs don't overwrite each other).
-          # The old one-level glob silently matched a stale flat-layout summary and
-          # reported the WRONG status (e.g. needs_input on a clean run).
-          STATUS=$(python3 -c "import json,glob,os; \
-            f=glob.glob('audit/*/*/run-summary.json') or glob.glob('audit/*/run-summary.json'); \
-            print(json.load(open(max(f,key=os.path.getmtime)))['status'] if f else 'unknown')" \
-            2>/dev/null || echo unknown)
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          # Binary split: 'done' is the only outcome that yields a reviewable branch.
-          if [ "$STATUS" = "done" ]; then
-            echo "prefix=harness" >> "$GITHUB_OUTPUT"
-            echo "completed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prefix=harness-halted" >> "$GITHUB_OUTPUT"
-            echo "completed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Harness status: $STATUS"
-
-      - name: Commit run to a single branch (always — success OR halt)
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          cd spring-petclinic
-          FEATURE="${{ github.event.inputs.feature_id }}"
-          STATUS="${{ steps.outcome.outputs.status }}"
-          # ONE branch per run. Prefix encodes the outcome so a halted run can never
-          # be mistaken for reviewable work:
-          #   harness/<feature>-<run_id>          -> completed  (PR raised below)
-          #   harness-halted/<feature>-<run_id>   -> halted     (pushed, NO PR)
-          # Pushed unconditionally, so the audit trail is retained even when the
-          # harness stops early. (Teams that don't want audit/ in the repo can
-          # .gitignore it — the uploaded workflow artifact still has it.)
-          BRANCH="${{ steps.outcome.outputs.prefix }}/${FEATURE}-${{ github.run_id }}"
-          git config user.name "harness-bot"
-          git config user.email "harness-bot@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          # real source + docs + the committed audit trail (never the gitignored
-          # .harness workspace itself). On a halt, src/ and docs/ may be partial or
-          # absent — that is the point: whatever exists is preserved.
-          git add src/ docs/ audit/ 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "Nothing to commit (no code, docs, or audit files produced)."
-            echo "::warning title=Empty run::No artifacts to retain for $FEATURE"
-          else
-            git commit -m "Harness: $FEATURE [status=$STATUS] (run ${{ github.run_id }})"
-            git push origin "$BRANCH"
-            if [ "${{ steps.outcome.outputs.completed }}" = "true" ]; then
-              echo "::notice title=Run retained::Branch $BRANCH (status=$STATUS)"
-            else
-              echo "::warning title=HALTED — no PR will be raised::Branch $BRANCH (status=$STATUS)"
-            fi
-          fi
-
-      - name: Summarize what was retained and what's missing
-        if: always()
-        run: |
-          echo "## Harness audit summary" >> "$GITHUB_STEP_SUMMARY"
-          python3 harness/audit_summary.py spring-petclinic >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Open pull request with the change
-        # Gate on the HARNESS's own status, not just the job's exit code. A run can
-        # exit 0 while halting at a gate (e.g. needs_input) — that must NOT raise a PR.
-        if: always() && steps.outcome.outputs.completed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          cd spring-petclinic
-          BRANCH="harness/${{ github.event.inputs.feature_id }}-${{ github.run_id }}"
-          # The branch was already created, committed, and pushed above — just open
-          # the PR against it. No re-checkout, no second commit.
-          gh pr create --title "Harness: ${{ github.event.inputs.feature_id }}" \
-            --body-file .harness/pr-body.md --base main --head "$BRANCH" || \
-            echo "PR creation skipped (check pr-body.md / branch state)"
-
-      - name: Explain why no PR was raised
-        if: always() && steps.outcome.outputs.completed != 'true'
-        run: |
-          echo "::notice title=No PR::Harness status='${{ steps.outcome.outputs.status }}' — \
-          run did not complete. Work retained on branch \
-          harness-halted/${{ github.event.inputs.feature_id }}-${{ github.run_id }} for inspection."
+    uses: bcbsm/harness-engine/.github/workflows/harness.yml@v1
+    with:
+      # Toolchain versions live HERE, not in config.yaml — CI setup steps
+      # (actions/setup-java etc.) run before config.yaml is parsed.
+      java-version: "17"        # BCBSM backend services are Java 17
+      python-version: "3.13"
+      node-version: "20"
+      feature_id: ${{ inputs.feature_id }}
+    secrets: inherit            # COPILOT_GITHUB_TOKEN provided at org/repo level

@@ -1,0 +1,115 @@
+# =============================================================================
+# .harness/config.yaml  —  per-repo harness configuration
+# Target: a BCBSM backend microservice (multi-module Maven, reactive/WebFlux)
+# Example filled for: dx_mbp-claims-service   (reference service)
+# =============================================================================
+#
+# This file lives in the SERVICE repo and is read by the harness at runtime.
+# Toolchain versions (Java/Python/Node) do NOT go here — they are workflow_call
+# inputs in the caller workflow, because they are needed by CI setup steps that
+# run before this file is parsed.
+#
+# TWO VALUES ARE PENDING developer answers and are marked  # PENDING-Q1 / Q6.
+# Everything else is structural and stable regardless of those answers.
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# MODULE LAYOUT  (multi-module Maven — backlog #10)
+# ---------------------------------------------------------------------------
+# A BCBSM service repo aggregates two sub-modules under a root POM:
+#   <svc>-application    -> the runnable service; ALL hand-written code lives here
+#   <svc>-openapi-code   -> OpenAPI-generated stubs; GENERATED, never hand-edited
+#
+# A story builds in the -application module only. The build still compiles the
+# -openapi-code module first because -application depends on it (handled by -am).
+target_module: dx_mbp-claims-service-application
+
+# The generated module — declared so the harness knows to EXCLUDE it from writes.
+generated_module: dx_mbp-claims-service-openapi-code
+
+
+# ---------------------------------------------------------------------------
+# BUILD / TEST  (module-aware)
+# ---------------------------------------------------------------------------
+# -pl <module>  = build just this module
+# -am           = "also make" the modules it depends on (compiles -openapi-code first)
+#
+# PENDING-Q6: 'verify' runs integration tests (*IT.java) too; 'test' runs unit only.
+# Use 'verify' ONLY if the service's integration tests run in-process (deterministic).
+# If they boot a real server / hit external systems, keep the gate on 'test' and
+# treat integration tests as advisory. Leaving as 'test' until Q6 is answered.
+test_command: "./mvnw -pl dx_mbp-claims-service-application -am test"   # PENDING-Q6 (test vs verify)
+
+
+# ---------------------------------------------------------------------------
+# COVERAGE GATE  (module-aware path)
+# ---------------------------------------------------------------------------
+# JaCoCo writes per-module; the CSV lives under the application module's target/.
+coverage_csv: "dx_mbp-claims-service-application/target/site/jacoco/jacoco.csv"
+
+# Per-changed-class line-coverage threshold (fraction, 0.0–1.0).
+# PENDING-Q1: 90% is the standard gate, but JaCoCo may under-report on reactive
+# code (logic inside .map/.flatMap lambdas). If a well-tested reactive service
+# realistically reports lower, adjust this (or the measurement) before the pilot.
+coverage_threshold: 0.90            # PENDING-Q1 (validate against reactive coverage)
+
+
+# ---------------------------------------------------------------------------
+# WRITE SCOPE  (per-phase allowed_writes — module-aware)
+# ---------------------------------------------------------------------------
+# Coding writes ONLY into the application module's main sources.
+# The generated module and generated packages are excluded so the agent can
+# never edit stubs or mappers.
+write_globs:
+  coding:
+    - "dx_mbp-claims-service-application/src/main/java/**"
+    - "dx_mbp-claims-service-application/src/main/resources/**"
+  unit_testing:
+    - "dx_mbp-claims-service-application/src/test/java/**"
+
+# Paths the agent must NEVER write, regardless of phase.
+# - the generated OpenAPI module
+# - any generated model/api packages inside the application module
+# - MapStruct-generated mapper implementations
+write_exclude:
+  - "dx_mbp-claims-service-openapi-code/**"
+  - "**/generated/**"
+  - "**/server/model/**"          # OpenAPI-generated models (hand-crafted go in model/)
+  - "**/*MapperImpl.java"         # MapStruct-generated mapper impls
+
+
+# ---------------------------------------------------------------------------
+# INSTRUCTIONS  (reactive — BCBSM standards)
+# ---------------------------------------------------------------------------
+# Scoped .instructions.md files applied by path. These encode the reactive
+# controller / WebClient / testing conventions from the landscape template.
+# (These are the files already drafted; they live in the toolkit / .github.)
+instructions:
+  - ".github/instructions/reactive-controller.instructions.md"
+  - ".github/instructions/reactive-webclient.instructions.md"
+  - ".github/instructions/reactive-testing.instructions.md"
+
+
+# ---------------------------------------------------------------------------
+# REFERENCE-SERVICE TRAPS  (do-not-copy patterns)
+# ---------------------------------------------------------------------------
+# If the agent pattern-matches against this reference service, two patterns in
+# it are NON-STANDARD and must not be replicated:
+#   1. the local reactive MongoDB repo (PrivacyCodemapRepo) — most services have
+#      no local DB; they only call the common layer.
+#   2. the legacy RAML-generated client — use the OpenAPI/WebClient pattern.
+# These are enforced by the instruction files above; listed here for humans.
+do_not_copy_patterns:
+  - "local reactive MongoDB repository (PrivacyCodemapRepo) — not standard"
+  - "legacy RAML-generated client — use OpenAPI + WebClient instead"
+
+
+# ---------------------------------------------------------------------------
+# MODEL ROUTING  (unchanged from demo — included models + independent reviewer)
+# ---------------------------------------------------------------------------
+model: "gpt-5-mini"                 # default for all phases (included / zero-credit)
+phase_models: {}                    # per-phase overrides (none needed)
+review_model: "claude-haiku-4.5"    # code_review on a different vendor (independence)
+review_loopback_phase: "coding"
+max_review_retries: 2
