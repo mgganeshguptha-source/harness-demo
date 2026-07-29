@@ -8,11 +8,69 @@ defaults for spring-petclinic on Windows are used.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 try:
     import yaml  # pyyaml
 except Exception:
     yaml = None
+
+
+def detect_application_module(repo_root: Path) -> str | None:
+    """Auto-detect the application (hand-written) module in a multi-module repo.
+
+    BCBSM services are aggregator repos: a root pom.xml with packaging=pom lists
+    sub-modules, typically <svc>-application (hand-written) and <svc>-openapi-code
+    (generated). Module folder names do NOT match the repo name, so we read the
+    layout from the POM/filesystem rather than guessing from the repo name.
+
+    Strategy (naming-independent):
+      1. Read <modules> from the root pom.xml.
+      2. Among those module dirs, pick the one that actually contains
+         src/main/java — that's where hand-written code lives.
+      3. If exactly one qualifies, return it. If none/ambiguous, return None
+         (caller falls back to single-module behaviour or an explicit override).
+
+    Returns the module directory name (repo-relative), or None for a single-module
+    repo or when detection is ambiguous.
+    """
+    try:
+        root_pom = repo_root / "pom.xml"
+        if not root_pom.exists():
+            return None
+        text = root_pom.read_text(encoding="utf-8", errors="replace")
+        # Only aggregator POMs have <modules>; single-module repos won't.
+        mods = re.findall(r"<module>\s*([^<]+?)\s*</module>", text)
+        if not mods:
+            return None
+        # Keep only modules whose dir actually holds hand-written main sources.
+        app_like = []
+        for m in mods:
+            m = m.strip().strip("/")
+            if (repo_root / m / "src" / "main" / "java").is_dir():
+                app_like.append(m)
+        if len(app_like) == 1:
+            return app_like[0]
+        # Ambiguous (0 or >1): let the caller decide / use an explicit override.
+        return None
+    except Exception:
+        return None
+
+
+def detect_generated_modules(repo_root: Path, application_module: str | None) -> list:
+    """Return the non-application sub-modules (generated stubs, etc.) so they can
+    be write-excluded. Any <module> that is NOT the application module is treated
+    as protected/generated for write purposes."""
+    try:
+        root_pom = repo_root / "pom.xml"
+        if not root_pom.exists():
+            return []
+        text = root_pom.read_text(encoding="utf-8", errors="replace")
+        mods = [m.strip().strip("/") for m in
+                re.findall(r"<module>\s*([^<]+?)\s*</module>", text)]
+        return [m for m in mods if m and m != application_module]
+    except Exception:
+        return []
 
 
 @dataclass
@@ -164,16 +222,37 @@ class HarnessConfig:
     # this gate.
     max_scope_retries: int = 2
 
+    # --- MULTI-MODULE MAVEN (backlog #10) ---
+    # The hand-written application module (repo-relative dir name). BCBSM services
+    # are aggregator repos: root pom + <svc>-application (code) + <svc>-openapi-code
+    # (generated). Empty => single-module repo (petclinic) OR auto-detect at load.
+    # An explicit value here OVERRIDES auto-detection (escape-hatch for odd repos).
+    target_module: str = ""
+    # Modules that are generated / must never be hand-edited (repo-relative dirs).
+    # Auto-populated at load with every non-application module unless set here.
+    generated_module: list = field(default_factory=list)
+    # Always-deny write globs — deny WINS over a phase's allowed_writes. Protects
+    # generated code even when it sits inside an otherwise-writable module.
+    # The generated module(s) are added automatically; these are extra patterns.
+    write_exclude: list = field(default_factory=lambda: [
+        "**/generated/**",       # generated sources
+        "**/*MapperImpl.java",   # MapStruct-generated mapper impls
+    ])
+
     @classmethod
-    def load(cls, harness_dir: Path) -> "HarnessConfig":
+    def load(cls, harness_dir: Path, repo_root: Path | None = None) -> "HarnessConfig":
         p = harness_dir / "config.yaml"
-        if not p.exists() or yaml is None:
-            return cls()
-        try:
-            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return cls()
-        return cls(
+        data = {}
+        if p.exists() and yaml is not None:
+            try:
+                data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            except Exception:
+                data = {}
+        # repo root holds the pom.xml; .harness/ sits directly under it.
+        if repo_root is None:
+            repo_root = harness_dir.parent
+
+        cfg = cls(
             test_command=data.get("test_command", cls.test_command),
             test_filter=data.get("test_filter", cls.test_filter),
             test_timeout=int(data.get("test_timeout", cls.test_timeout)),
@@ -201,7 +280,51 @@ class HarnessConfig:
             review_loopback_phase=data.get("review_loopback_phase", cls.review_loopback_phase),
             max_review_retries=int(data.get("max_review_retries", cls.max_review_retries)),
             max_scope_retries=int(data.get("max_scope_retries", cls.max_scope_retries)),
+            target_module=data.get("target_module", "") or "",
+            generated_module=data.get("generated_module") or [],
+            write_exclude=(data.get("write_exclude")
+                           if data.get("write_exclude") is not None
+                           else cls().write_exclude),
         )
+
+        # --- multi-module resolution (backlog #10) ---
+        # Precedence: explicit config value > auto-detect from pom.xml > none.
+        if not cfg.target_module:
+            detected = detect_application_module(repo_root)
+            if detected:
+                cfg.target_module = detected
+        # Populate generated modules (everything that is NOT the app module) unless
+        # the config named them explicitly. These become write-excluded.
+        if cfg.target_module and not cfg.generated_module:
+            cfg.generated_module = detect_generated_modules(repo_root, cfg.target_module)
+        # Every generated module dir is an always-deny write path.
+        for gm in cfg.generated_module:
+            glob = f"{gm}/**"
+            if glob not in cfg.write_exclude:
+                cfg.write_exclude.append(glob)
+
+        return cfg
+
+    def module_writes(self, allowed_globs) -> tuple:
+        """Rewrite a phase's allowed_writes for a multi-module repo (Option A).
+
+        Module-relative globs (src/main/**, src/test/**, docs/**) are prefixed with
+        the detected application module so writes land in <module>/src/main/** rather
+        than the repo root. Globs already anchored (starting with '.harness', '.github',
+        or the module name, or containing a '/') are left untouched.
+
+        Single-module repos (target_module empty) are unchanged — petclinic still works.
+        """
+        if not self.target_module:
+            return tuple(allowed_globs)
+        MODULE_RELATIVE = ("src/main/", "src/test/", "src/", "docs/")
+        out = []
+        for g in allowed_globs:
+            if any(g.startswith(pfx) for pfx in MODULE_RELATIVE):
+                out.append(f"{self.target_module}/{g}")
+            else:
+                out.append(g)  # .harness/**, .github/**, etc. stay repo-root-relative
+        return tuple(out)
 
     def model_for_phase(self, phase_id: str) -> str:
         """Model for a phase: phase_models[phase_id] if set, else the default.
