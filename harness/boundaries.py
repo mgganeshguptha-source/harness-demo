@@ -66,13 +66,31 @@ def _to_repo_relative(path: str, repo_root: str | None) -> str:
     return p
 
 
-def is_write_allowed(path: str, allowed_globs, repo_root: str | None = None) -> bool:
+def is_excluded(path: str, exclude_globs, repo_root: str | None = None) -> bool:
+    """
+    Return True iff `path` matches any exclude glob — an ALWAYS-DENY set that
+    wins over allowed_writes. Used for generated code that must never be edited
+    even when it sits inside an otherwise-writable module (e.g. the -openapi-code
+    module, generated model packages, MapStruct *MapperImpl.java).
+
+    Empty/None exclude_globs => nothing excluded.
+    """
+    if not exclude_globs:
+        return False
+    rel = _to_repo_relative(path, repo_root)
+    return any(_matches(rel, g) for g in exclude_globs)
+
+
+def is_write_allowed(path: str, allowed_globs, repo_root: str | None = None,
+                     exclude_globs=None) -> bool:
     """
     Return True iff `path` is permitted to be written under the current phase.
 
     - Absolute paths under repo_root are relativized first (the SDK reports
       absolute paths; our globs are repo-relative).
     - An escape attempt ('..' above root) is ALWAYS denied.
+    - A path matching `exclude_globs` is ALWAYS denied — DENY WINS OVER ALLOW.
+      This protects generated code that lives inside a writable module.
     - Empty allowed_globs => read-only phase => everything denied.
     """
     rel = _to_repo_relative(path, repo_root)
@@ -82,14 +100,24 @@ def is_write_allowed(path: str, allowed_globs, repo_root: str | None = None) -> 
     # An absolute path that did NOT resolve under repo_root is out of bounds.
     if (rel.startswith("/") or (len(rel) > 1 and rel[1] == ":")):
         return False
+    # DENY WINS: an excluded path is refused even if an allow-glob matches it.
+    if is_excluded(rel, exclude_globs, repo_root):
+        return False
     if not allowed_globs:
         return False
     return any(_matches(rel, g) for g in allowed_globs)
 
 
-def deny_reason(path: str, phase_id: str, allowed_globs, repo_root: str | None = None) -> str:
+def deny_reason(path: str, phase_id: str, allowed_globs, repo_root: str | None = None,
+                exclude_globs=None) -> str:
     """Human-readable explanation for an audit log when a write is denied."""
     rel = _normalize(_to_repo_relative(path, repo_root))
+    if is_excluded(rel, exclude_globs, repo_root):
+        return (
+            f"BOUNDARY_VIOLATION in phase '{phase_id}': "
+            f"write to '{rel}' is EXCLUDED (generated/protected path) "
+            f"matching {list(exclude_globs or [])}"
+        )
     return (
         f"BOUNDARY_VIOLATION in phase '{phase_id}': "
         f"write to '{rel}' is outside allowed paths {list(allowed_globs)}"

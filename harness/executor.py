@@ -162,9 +162,24 @@ class PhaseExecutor:
             return ExitCode.SDK_ERROR
 
         # --- THE INTERLOCK: every attempted write must be in-bounds ---
+        # Multi-module (backlog #10): prefix module-relative globs with the detected
+        # application module, and load the always-deny exclude set (generated code).
+        # Single-module repos are unchanged (module_writes is a no-op, exclude may
+        # still carry the default generated-code patterns).
+        try:
+            from config import HarnessConfig as _HCw
+            _cfgw = _HCw.load(self.harness_dir, repo_root=self.repo_root)
+            _allowed = _cfgw.module_writes(phase.allowed_writes)
+            _exclude = _cfgw.write_exclude
+        except Exception:
+            _allowed = phase.allowed_writes
+            _exclude = None
         for w in result.attempted_writes:
-            if not is_write_allowed(w, phase.allowed_writes, repo_root=str(self.repo_root)):
-                self.log("  ! " + deny_reason(w, phase.id, phase.allowed_writes, repo_root=str(self.repo_root)))
+            if not is_write_allowed(w, _allowed, repo_root=str(self.repo_root),
+                                    exclude_globs=_exclude):
+                self.log("  ! " + deny_reason(w, phase.id, _allowed,
+                                              repo_root=str(self.repo_root),
+                                              exclude_globs=_exclude))
                 return ExitCode.BOUNDARY_VIOLATION
 
         # --- pinned artifact must exist ---
